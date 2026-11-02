@@ -260,30 +260,29 @@ class AgendaView(context: Context) : PatchView(context) {
 // ----------------------------------------------------------------------
 
 /**
- * アプリ 1 つ。刺繍にしたアイコンと、その下に名前を描く。タップで起動、長押しで [onMenu]。
- * 触れている間は少し沈ませる。
+ * アプリ 1 つ。ジャンルの刺繍アイコンと、その下に小さくアプリ名を描く。
+ * タップで起動、長押しで [onLongPress]（編集モードに入る）。触れている間は少し沈ませる。
  */
 @SuppressLint("ViewConstructor")
 class AppCell(
     context: Context,
     val app: AppEntry,
     private val repo: AppRepository,
-    private val iconDp: Float = 46f,
-    private val onMenu: (AppCell) -> Unit,
+    genre: Genre,
+    private val iconDp: Float = 40f,
+    private val onLongPress: (AppCell) -> Unit,
 ) : View(context) {
-    private var icon: Bitmap? = null
-    private val label: TextPaint = context.threadText(11.5f).apply {
-        textAlign = Paint.Align.CENTER
-        letterSpacing = 0.04f
-    }
     private val iconPx = context.dpi(iconDp)
+    private val icon: Bitmap = GenreIcons.bitmap(genre, iconPx)
+    private val label: TextPaint = context.threadText(10f).apply {
+        textAlign = Paint.Align.CENTER
+        letterSpacing = 0.03f
+    }
 
     init {
         setOnClickListener { repo.launch(app, this) }
-        setOnLongClickListener { onMenu(this); true }
+        setOnLongClickListener { onLongPress(this); true }
         contentDescription = app.label
-        icon = StitchIcons.cached(app, iconPx)
-        if (icon == null) StitchIcons.load(context, app, iconPx) { icon = it; invalidate() }
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -296,33 +295,65 @@ class AppCell(
     }
 
     override fun onDraw(canvas: Canvas) {
-        val gap = context.dp(7f)
+        val gap = context.dp(5f)
         val total = iconPx + gap + label.textSize
         val top = (height - total) / 2
-        icon?.let { canvas.drawBitmap(it, (width - iconPx) / 2f, top, null) }
-        val text = TextUtils.ellipsize(app.label, label, width - context.dp(6f), TextUtils.TruncateAt.END)
+        canvas.drawBitmap(icon, (width - iconPx) / 2f, top, null)
+        val text = TextUtils.ellipsize(app.label, label, width - context.dp(8f), TextUtils.TruncateAt.END)
         canvas.drawText(text, 0, text.length, width / 2f, top + iconPx + gap + label.textSize * 0.85f, label)
     }
 }
 
-/** 下段のジーンズのポケット。アプリを最大 [MAX] 個、等間隔に並べる。 */
+/**
+ * 下段のジーンズのポケット。[LayoutStore.DOCK_SLOTS] 個の枠に、アプリを 1 つずつ入れる。
+ * 編集モード（[editing]）では、枠にチャコペンの縫い線を引き、枠のタップで [onSlotTap]、右上の × で [onSlotRemove]。
+ */
 class PocketDock(context: Context) : PatchLayout(context, PatchPainter.Shape.Pocket) {
+    private var cells: List<AppCell?> = List(LayoutStore.DOCK_SLOTS) { null }
+    var onSlotTap: ((Int) -> Unit)? = null
+    var onSlotRemove: ((Int) -> Unit)? = null
+
+    var editing = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    private val chalk = context.stitch(0.9f, Thread.FAINT)
+    private val badgeFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Cloth.FELT
+        setShadowLayer(context.dp(3f), 0f, context.dp(1.5f), 0xC0000000.toInt())
+    }
+    private val badgeRing = context.stitch(1.1f)
+    private val badgeMark = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Thread.COLOR
+        strokeWidth = context.dp(1.8f)
+        strokeCap = Paint.Cap.ROUND
+        style = Paint.Style.STROKE
+    }
+    private val rect = RectF()
+
     init {
         // 上の二重ステッチの下から並べる
         val p = patch.contentPadding.toInt()
         setPadding(p, p + context.dpi(6f), p, p)
     }
 
-    fun setCells(cells: List<AppCell>) {
+    /** 枠ごとのアプリ（空の枠は null）。 */
+    fun setCells(list: List<AppCell?>) {
         removeAllViews()
-        cells.take(MAX).forEach { addView(it) }
+        cells = List(LayoutStore.DOCK_SLOTS) { list.getOrNull(it) }
+        cells.forEach { c -> c?.let { addView(it) } }
         requestLayout()
+        invalidate()
     }
+
+    private fun slotW() = (width - paddingLeft - paddingRight) / LayoutStore.DOCK_SLOTS
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val h = MeasureSpec.getSize(heightMeasureSpec)
-        val cw = (w - paddingLeft - paddingRight) / MAX
+        val cw = (w - paddingLeft - paddingRight) / LayoutStore.DOCK_SLOTS
         val ch = h - paddingTop - paddingBottom
         for (i in 0 until childCount) {
             getChildAt(i).measure(MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY))
@@ -331,17 +362,61 @@ class PocketDock(context: Context) : PatchLayout(context, PatchPainter.Shape.Poc
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        val cw = (width - paddingLeft - paddingRight) / MAX
-        // アプリが少ないときも真ん中に寄せる
-        val start = paddingLeft + (MAX - childCount) * cw / 2
-        for (i in 0 until childCount) {
-            val c = getChildAt(i)
-            val x = start + i * cw
+        val cw = slotW()
+        cells.forEachIndexed { i, c ->
+            c ?: return@forEachIndexed
+            val x = paddingLeft + i * cw
             c.layout(x, paddingTop, x + c.measuredWidth, paddingTop + c.measuredHeight)
         }
     }
 
-    companion object {
-        const val MAX = 4
+    private fun slotRect(i: Int, out: RectF) {
+        val cw = slotW()
+        val pad = context.dp(4f)
+        out.set(paddingLeft + i * cw + pad, paddingTop + pad, paddingLeft + (i + 1) * cw - pad, height - paddingBottom - pad)
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        super.dispatchDraw(canvas)
+        if (!editing) return
+        val r = context.dp(12f)
+        for (i in 0 until LayoutStore.DOCK_SLOTS) {
+            slotRect(i, rect)
+            canvas.drawRoundRect(rect, context.dp(14f), context.dp(14f), chalk)
+            if (cells[i] != null) {
+                val bx = rect.right - r * 0.3f
+                val by = rect.top + r * 0.3f
+                canvas.drawCircle(bx, by, r, badgeFill)
+                canvas.drawCircle(bx, by, r - context.dp(2.5f), badgeRing)
+                val k = r * 0.35f
+                canvas.drawLine(bx - k, by - k, bx + k, by + k, badgeMark)
+                canvas.drawLine(bx + k, by - k, bx - k, by + k, badgeMark)
+            }
+        }
+    }
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = editing
+
+    private var downSlot = -1
+    private var downRemove = false
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        if (!editing) return super.onTouchEvent(ev)
+        val i = ((ev.x - paddingLeft) / slotW()).toInt().coerceIn(0, LayoutStore.DOCK_SLOTS - 1)
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downSlot = i
+                slotRect(i, rect)
+                val r = context.dp(12f)
+                downRemove = cells[i] != null &&
+                    kotlin.math.hypot(ev.x - (rect.right - r * 0.3f), ev.y - (rect.top + r * 0.3f)) < r * 1.7f
+            }
+            MotionEvent.ACTION_UP -> {
+                if (i == downSlot) if (downRemove) onSlotRemove?.invoke(i) else onSlotTap?.invoke(i)
+                downSlot = -1
+            }
+        }
+        return true
     }
 }

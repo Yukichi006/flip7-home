@@ -74,6 +74,12 @@ class AppRepository(private val context: Context) {
 
     var apps: List<AppEntry> = emptyList()
         private set
+    private val store = LayoutStore(context)
+    private val guessed = mutableMapOf<String, Genre>()
+
+    /** アプリのアイコンにするジャンル。自分で選び直していればそれ、なければ推し量ったもの。 */
+    fun genre(app: AppEntry): Genre =
+        store.genreOf(app.key) ?: guessed.getOrPut(app.key) { Genre.guess(context, app) }
     private var byKey: Map<String, AppEntry> = emptyMap()
 
     private val callback = object : LauncherApps.Callback() {
@@ -114,7 +120,9 @@ class AppRepository(private val context: Context) {
 
     private fun load() {
         val collator = Collator.getInstance(Locale.JAPANESE)
-        val list = launcherApps.profiles.flatMap { user ->
+        // 自分のプロファイルが取れないことはまずないが、念のため自分だけでも並べる
+        val profiles = runCatching { launcherApps.profiles }.getOrNull().orEmpty().ifEmpty { listOf(android.os.Process.myUserHandle()) }
+        val list = profiles.flatMap { user ->
             val serial = userManager.getSerialNumberForUser(user)
             runCatching { launcherApps.getActivityList(null, user) }.getOrDefault(emptyList())
                 .filter { it.componentName.packageName != context.packageName }
@@ -122,6 +130,7 @@ class AppRepository(private val context: Context) {
         }
         apps = list.sortedWith(compareBy<AppEntry> { it.group }.thenComparator { a, b -> collator.compare(a.label, b.label) })
         byKey = apps.associateBy { it.key }
+        guessed.clear()
     }
 
     /** よく使う標準アプリ（電話・メッセージ・カメラ・設定）。最初の起動で下段に置く。 */

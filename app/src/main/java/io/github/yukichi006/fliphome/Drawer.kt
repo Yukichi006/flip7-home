@@ -228,7 +228,7 @@ class DrawerView(
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
             when (val row = rows[position]) {
                 is Header -> ((convertView as? HeaderRow) ?: HeaderRow(context)).also { it.bind(row.group) }
-                is Item -> ((convertView as? AppRow) ?: AppRow(context)).also { it.bind(row.app) }
+                is Item -> ((convertView as? AppRowView) ?: AppRowView(context, repo)).also { it.bind(row.app) }
             }
     }
 
@@ -253,32 +253,6 @@ class DrawerView(
         }
     }
 
-    /** アプリ 1 行：刺繍アイコンと名前。 */
-    private class AppRow(context: Context) : View(context) {
-        private var app: AppEntry? = null
-        private var icon: Bitmap? = null
-        private val iconPx = context.dpi(34f)
-        private val label = context.threadText(15f)
-
-        init { layoutParams = AbsListView.LayoutParams(AbsListView.LayoutParams.MATCH_PARENT, context.dpi(56f)) }
-
-        fun bind(entry: AppEntry) {
-            if (entry === app) return
-            app = entry
-            icon = StitchIcons.cached(entry, iconPx)
-            if (icon == null) StitchIcons.load(context, entry, iconPx) { b -> if (app === entry) { icon = b; invalidate() } }
-            contentDescription = entry.label
-            invalidate()
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            val a = app ?: return
-            icon?.let { canvas.drawBitmap(it, 0f, (height - iconPx) / 2f, null) }
-            val x = iconPx + context.dp(16f)
-            val t = TextUtils.ellipsize(a.label, label, width - x, TextUtils.TruncateAt.END)
-            canvas.drawText(t, 0, t.length, x, height / 2f + label.textSize * 0.35f, label)
-        }
-    }
 }
 
 /**

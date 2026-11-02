@@ -115,3 +115,6 @@ fun Canvas.drawDoubleSeam(left: Float, right: Float, y: Float, gap: Float, paint
     drawLine(left, y - gap / 2, right, y - gap / 2, paint)
     drawLine(left, y + gap / 2, right, y + gap / 2, paint)
 }
+
+fun android.view.View.dp(v: Float): Float = context.dp(v)
+fun android.view.View.dpi(v: Float): Int = context.dpi(v)

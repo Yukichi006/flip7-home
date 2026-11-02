@@ -29,8 +29,7 @@ import kotlin.math.max
  *
  * - 上へスワイプ：アプリ一覧を開く
  * - 下へスワイプ：通知を開く
- * - 何もない所を長押し：部品の追加、ホームアプリの切り替え
- * - アプリや部品を長押し：外す・アプリ情報など
+ * - どこかを長押し：編集モード（空いたマスをタップして追加、ドラッグで移動、× で外す、右下のつまみで大きさ）
  */
 class HomeActivity : Activity() {
     private lateinit var repo: AppRepository
@@ -41,10 +40,15 @@ class HomeActivity : Activity() {
     private lateinit var dock: PocketDock
     private lateinit var drawer: DrawerView
     private lateinit var banner: View
+    private lateinit var editBar: View
     private lateinit var anchor: View
 
     /** ホーム画面を組み立て終えたか（不具合の記録を見せているときは false）。 */
     private var ready = false
+    private var editing = false
+    private var sheet: Sheet? = null
+    private var insetTop = 0
+    private var insetBottom = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -63,9 +67,17 @@ class HomeActivity : Activity() {
         banner = makeBanner()
         grid = ModuleGrid(this).apply {
             onRowsChanged = { store.rows = it }
-            setOnLongClickListener { showHomeMenu(); true }
+            setOnLongClickListener { enterEdit(); true }
+            onEmptyTap = { c, r -> showCellSheet(c, r) }
+            onModuleTap = { m -> showModuleSheet(m) }
+            onRemove = { m -> store.remove(m); rebuildHome() }
+            onChange = { old, new -> store.replace(old, new); rebuildHome() }
         }
-        dock = PocketDock(this)
+        dock = PocketDock(this).apply {
+            setOnLongClickListener { enterEdit(); true }
+            onSlotTap = { i -> showDockSheet(i) }
+            onSlotRemove = { i -> store.setDockSlot(i, null); rebuildHome() }
+        }
         val side = dpi(8f)
         column.addView(banner, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(70f)).apply {
             setMargins(side, dpi(4f), side, 0)
@@ -73,23 +85,33 @@ class HomeActivity : Activity() {
         column.addView(grid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply {
             setMargins(side, 0, side, 0)
         })
-        column.addView(dock, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(136f)).apply {
+        column.addView(dock, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(128f)).apply {
             setMargins(side, 0, side, dpi(4f))
         })
         root.addView(column, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+
+        editBar = makeEditBar()
+        editBar.visibility = View.GONE
+        root.addView(editBar, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dpi(70f), Gravity.TOP).apply {
+            setMargins(dpi(6f), 0, dpi(6f), 0)
+        })
 
         drawer = DrawerView(this, repo, onMenu = { app, v -> showDrawerMenu(app, v) }, onClose = { closeDrawer() })
         drawer.visibility = View.GONE
         root.addView(drawer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
 
-        // 何もない所を長押ししたとき、メニューを指の位置に出すための目印
+        // メニューを指の位置などに出すための目印
         anchor = View(this)
         root.addView(anchor, FrameLayout.LayoutParams(1, 1))
 
         root.setOnApplyWindowInsetsListener { _, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val ime = insets.getInsets(WindowInsets.Type.ime())
+            insetTop = bars.top
+            insetBottom = bars.bottom
             column.setPadding(0, bars.top, 0, bars.bottom)
+            (editBar.layoutParams as FrameLayout.LayoutParams).topMargin = bars.top
+            editBar.requestLayout()
             drawer.applyInsets(bars.top, max(bars.bottom, ime.bottom))
             insets
         }
@@ -127,14 +149,20 @@ class HomeActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         if (!ready) return
-        // ホーム画面にいるときにホームボタンを押したら、アプリ一覧を閉じる
+        // ホーム画面にいるときにホームボタンを押したら、開いているものを閉じて元に戻す
+        sheet?.dismiss()
+        if (editing) exitEdit()
         if (drawer.visibility == View.VISIBLE) closeDrawer()
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         if (!ready) return
-        if (drawer.visibility == View.VISIBLE) closeDrawer()
+        when {
+            sheet != null -> sheet?.dismiss()
+            editing -> exitEdit()
+            drawer.visibility == View.VISIBLE -> closeDrawer()
+        }
         // ホーム画面そのものは戻るボタンで閉じない
     }
 
@@ -161,17 +189,17 @@ class HomeActivity : Activity() {
                 ModuleType.AGENDA -> AgendaView(this)
                 ModuleType.BATTERY -> BatteryPatch(this)
                 // アンインストールされたアプリ（や一時的に使えない仕事用のアプリ）は表示しないだけで、配置は残す
-                ModuleType.APP -> repo.find(m.arg)?.let { app ->
-                    AppCell(this, app, repo) { cell -> showPadMenu(cell, m) }
-                } ?: continue
+                ModuleType.APP -> repo.find(m.arg)?.let { app -> cellFor(app) } ?: continue
             }
-            if (m.type != ModuleType.APP) view.setOnLongClickListener { showModuleMenu(it, m); true }
+            if (m.type != ModuleType.APP) view.setOnLongClickListener { enterEdit(); true }
             grid.addModule(view, m)
         }
-        dock.setCells(store.dock.orEmpty().mapNotNull { repo.find(it) }.map { app ->
-            AppCell(this, app, repo) { cell -> showDockMenu(cell) }
-        })
+        dock.setCells(store.dock.orEmpty().map { key -> key?.let { repo.find(it) }?.let { cellFor(it) } })
+        grid.editing = editing
+        dock.editing = editing
     }
+
+    private fun cellFor(app: AppEntry) = AppCell(this, app, repo, repo.genre(app)) { enterEdit() }
 
     private fun refreshModules() {
         for (i in 0 until grid.childCount) {
@@ -181,6 +209,151 @@ class HomeActivity : Activity() {
             }
         }
     }
+
+    // ------------------------------------------------------------------
+    // 編集モード
+    // ------------------------------------------------------------------
+
+    private fun enterEdit() {
+        if (editing) return
+        editing = true
+        root.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+        grid.editing = true
+        dock.editing = true
+        editBar.visibility = View.VISIBLE
+        editBar.alpha = 0f
+        editBar.animate().alpha(1f).setDuration(150).start()
+    }
+
+    private fun exitEdit() {
+        editing = false
+        grid.editing = false
+        dock.editing = false
+        editBar.animate().alpha(0f).setDuration(150).withEndAction { editBar.visibility = View.GONE }.start()
+    }
+
+    /** 編集モードの間、画面の上に出す帯。説明と「完了」「…」。 */
+    private fun makeEditBar(): View = PatchLayout(this, PatchPainter.Shape.Round(40f)).apply {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(TextView(context).apply {
+            text = "空いたマスをタップして追加\nドラッグで移動・× で外す"
+            setTextColor(Thread.COLOR)
+            textSize = 11.5f
+            setShadowLayer(dp(0.6f), 0f, dp(1f), Thread.SHADOW)
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(Pill(context, "…").apply { setOnClickListener { showEditMenu(this) } },
+            LinearLayout.LayoutParams(dpi(56f), dpi(46f)))
+        row.addView(Pill(context, "完了", selected = true).apply { setOnClickListener { exitEdit() } },
+            LinearLayout.LayoutParams(dpi(86f), dpi(46f)))
+        addView(row, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        // 帯そのものへのタップは、後ろのマス目に通さない
+        isClickable = true
+        val p = dpi(9f)
+        setPadding(dpi(22f), p, p, p)
+    }
+
+    private fun showEditMenu(anchorView: View) = PopupMenu(this, anchorView).apply {
+        menu.add("アプリ一覧を開く").setOnMenuItemClickListener { exitEdit(); openDrawer(); true }
+        menu.add("ホームアプリを切り替える").setOnMenuItemClickListener {
+            runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
+            true
+        }
+        menu.add("FlipHome ${versionName()}").isEnabled = false
+    }.show()
+
+    // ------------------------------------------------------------------
+    // 設定のパネル（ボトムシート）
+    // ------------------------------------------------------------------
+
+    private fun openSheet(title: String, build: (Sheet) -> Unit) {
+        sheet?.dismiss()
+        val s = Sheet(this, insetBottom) { if (sheet != null && sheet?.parent == null) sheet = null }
+        s.setTitle(title)
+        build(s)
+        sheet = s
+        s.show(root)
+    }
+
+    private fun closeSheet() {
+        sheet?.dismiss()
+        sheet = null
+    }
+
+    /** 空いたマスをタップしたとき：アプリか部品を選んで置く。 */
+    private fun showCellSheet(col: Int, row: Int) = openSheet("マスに置く") { s ->
+        fun appTab() = s.setBody(AppPicker(this, repo) { app ->
+            store.placeAt(ModuleType.APP, col, row, app.key)
+            closeSheet()
+            rebuildHome()
+        })
+        fun moduleTab() = s.setBody(modulePicker(this) { type ->
+            if (store.placeAt(type, col, row) == null) toast("ここには置けません")
+            closeSheet()
+            rebuildHome()
+        })
+        s.setTabs(listOf("アプリ", "部品"), 0) { if (it == 0) appTab() else moduleTab() }
+        appTab()
+    }
+
+    /** 置いてある部品をタップしたとき。 */
+    private fun showModuleSheet(m: Module) {
+        if (m.type != ModuleType.APP) {
+            openSheet(m.type.label) { s ->
+                s.setTabs(emptyList(), 0) {}
+                s.setBody(actionList(this, listOf("ホームから外す" to { store.remove(m); closeSheet(); rebuildHome() }),
+                    note = "大きさは右下のつまみ、場所はドラッグで変えられます。"))
+            }
+            return
+        }
+        val app = repo.find(m.arg) ?: return
+        appSheet(app.label, app,
+            change = { new -> store.replace(m, m.copy(arg = new.key)) },
+            remove = { store.remove(m) })
+    }
+
+    /** 下段の枠をタップしたとき。 */
+    private fun showDockSheet(index: Int) {
+        val app = store.dock?.getOrNull(index)?.let { repo.find(it) }
+        if (app == null) {
+            openSheet("下段に置くアプリ") { s ->
+                s.setTabs(emptyList(), 0) {}
+                s.setBody(AppPicker(this, repo) { picked ->
+                    store.setDockSlot(index, picked.key)
+                    closeSheet()
+                    rebuildHome()
+                })
+            }
+            return
+        }
+        appSheet(app.label, app,
+            change = { new -> store.setDockSlot(index, new.key) },
+            remove = { store.setDockSlot(index, null) })
+    }
+
+    /** アプリのパッドの設定：アプリを変える・アイコンを変える・アプリ情報・外す。 */
+    private fun appSheet(title: String, app: AppEntry, change: (AppEntry) -> Unit, remove: () -> Unit) = openSheet(title) { s ->
+        s.setTabs(emptyList(), 0) {}
+        fun actions() = s.setBody(actionList(this, listOf(
+            "アプリを変える" to {
+                s.setBody(AppPicker(this, repo) { new -> change(new); closeSheet(); rebuildHome() })
+            },
+            "アイコンを変える（いま：${repo.genre(app).label}）" to {
+                s.setBody(genrePicker(this, store.genreOf(app.key)) { g ->
+                    store.setGenre(app.key, g)
+                    closeSheet()
+                    rebuildHome()
+                })
+            },
+            "アプリ情報・アンインストール" to { repo.openDetails(app) },
+            "外す" to { remove(); closeSheet(); rebuildHome() },
+        )))
+        actions()
+    }
+
+    private fun toast(text: String) = Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
 
     // ------------------------------------------------------------------
     // アプリ一覧
@@ -201,34 +374,8 @@ class HomeActivity : Activity() {
             .withEndAction { drawer.visibility = View.GONE }.start()
     }
 
-    // ------------------------------------------------------------------
-    // メニュー
-    // ------------------------------------------------------------------
-
-    private fun popup(anchorView: View, build: PopupMenu.() -> Unit) {
-        PopupMenu(this, anchorView, Gravity.CENTER).apply(build).show()
-    }
-
-    /** ホーム画面のアプリのパッドを長押ししたとき。 */
-    private fun showPadMenu(cell: AppCell, module: Module) = popup(cell) {
-        menu.add("ホームから外す").setOnMenuItemClickListener { store.remove(module); rebuildHome(); true }
-        appItems(cell.app)
-    }
-
-    private fun showDockMenu(cell: AppCell) = popup(cell) {
-        menu.add("下段から外す").setOnMenuItemClickListener {
-            store.dock = store.dock.orEmpty() - cell.app.key
-            rebuildHome()
-            true
-        }
-        appItems(cell.app)
-    }
-
-    private fun showModuleMenu(view: View, module: Module) = popup(view) {
-        menu.add("ホームから外す").setOnMenuItemClickListener { store.remove(module); rebuildHome(); true }
-    }
-
-    private fun showDrawerMenu(app: AppEntry, view: View) = popup(view) {
+    /** アプリ一覧でアプリを長押ししたとき。 */
+    private fun showDrawerMenu(app: AppEntry, view: View) = PopupMenu(this, view, Gravity.CENTER).apply {
         val onHome = store.has(ModuleType.APP, app.key)
         if (onHome) {
             menu.add("ホームから外す").setOnMenuItemClickListener {
@@ -240,61 +387,27 @@ class HomeActivity : Activity() {
             menu.add("ホームに追加").setOnMenuItemClickListener {
                 if (store.add(ModuleType.APP, app.key)) {
                     rebuildHome()
-                    Toast.makeText(this@HomeActivity, "${app.label} をホームに置きました", Toast.LENGTH_SHORT).show()
+                    toast("${app.label} をホームに置きました")
                 } else {
-                    Toast.makeText(this@HomeActivity, "ホームに空いているマスがありません", Toast.LENGTH_SHORT).show()
+                    toast("ホームに空いているマスがありません")
                 }
                 true
             }
         }
-        val dockKeys = store.dock.orEmpty()
-        if (app.key !in dockKeys) {
+        val slots = store.dock ?: List(LayoutStore.DOCK_SLOTS) { null }
+        if (app.key !in slots) {
             val sub = menu.addSubMenu("下段に置く")
-            if (dockKeys.size < PocketDock.MAX) {
-                sub.add("右端に足す").setOnMenuItemClickListener {
-                    store.dock = dockKeys + app.key
-                    rebuildHome()
-                    true
-                }
-            }
-            dockKeys.forEachIndexed { i, key ->
-                val name = repo.find(key)?.label ?: "（使えないアプリ）"
-                sub.add("$name と入れ替える").setOnMenuItemClickListener {
-                    store.dock = dockKeys.toMutableList().also { it[i] = app.key }
+            slots.forEachIndexed { i, key ->
+                val now = key?.let { repo.find(it)?.label } ?: "空き"
+                sub.add("${i + 1} 番目（$now）").setOnMenuItemClickListener {
+                    store.setDockSlot(i, app.key)
                     rebuildHome()
                     true
                 }
             }
         }
-        appItems(app)
-    }
-
-    private fun PopupMenu.appItems(app: AppEntry) {
-        // アンインストールは、アプリ情報の画面のボタンから行う（ほかのアプリを消す権限は持たない）
         menu.add("アプリ情報・アンインストール").setOnMenuItemClickListener { repo.openDetails(app); true }
-    }
-
-    /** 何もない所を長押ししたとき。 */
-    private fun showHomeMenu() {
-        anchor.x = root.lastTouchX
-        anchor.y = root.lastTouchY
-        popup(anchor) {
-            val add = menu.addSubMenu("部品を追加")
-            for (type in listOf(ModuleType.CLOCK, ModuleType.AGENDA, ModuleType.BATTERY)) {
-                add.add(type.label).setOnMenuItemClickListener {
-                    if (store.add(type)) rebuildHome()
-                    else Toast.makeText(this@HomeActivity, "${type.w}×${type.h} マスの空きがありません", Toast.LENGTH_SHORT).show()
-                    true
-                }
-            }
-            menu.add("アプリ一覧").setOnMenuItemClickListener { openDrawer(); true }
-            menu.add("ホームアプリを切り替える").setOnMenuItemClickListener {
-                runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
-                true
-            }
-            menu.add("FlipHome ${versionName()}").isEnabled = false
-        }
-    }
+    }.show()
 
     private fun versionName() =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull().orEmpty()
@@ -347,6 +460,7 @@ class HomeActivity : Activity() {
     /**
      * ホーム画面のいちばん外側。布地を敷き、縦のスワイプを拾う。
      * 上へ：指についてアプリ一覧がせり上がり、離した位置と速さで開くか戻るかを決める。下へ：通知を開く。
+     * 編集モードやパネルを開いている間は、スワイプを拾わない。
      */
     private inner class HomeRoot(context: Context) : FrameLayout(context) {
         private val fabric = Fabric.paint(context, Cloth.BASE)
@@ -355,23 +469,16 @@ class HomeActivity : Activity() {
         private var downY = 0f
         private var mode = 0 // 0: まだ, 1: 上へ（一覧）, 2: 下へ（通知）
         private var velocity: VelocityTracker? = null
-        var lastTouchX = 0f
-        var lastTouchY = 0f
 
         init { setWillNotDraw(false) }
 
         override fun onDraw(canvas: Canvas) = canvas.drawPaint(fabric)
 
-        override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-            if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
-                lastTouchX = ev.x
-                lastTouchY = ev.y
-            }
-            return super.dispatchTouchEvent(ev)
-        }
+        private fun swipesAllowed() = !editing && sheet == null &&
+            !(drawer.visibility == View.VISIBLE && drawer.translationY == 0f)
 
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-            if (drawer.visibility == View.VISIBLE && drawer.translationY == 0f) return false
+            if (!swipesAllowed()) return false
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = ev.x
@@ -404,11 +511,10 @@ class HomeActivity : Activity() {
 
         @SuppressLint("ClickableViewAccessibility")
         override fun onTouchEvent(ev: MotionEvent): Boolean {
+            if (!swipesAllowed()) return false
             velocity?.addMovement(ev)
             val dy = ev.y - downY
             when (ev.actionMasked) {
-                // 何もない所から触り始めたときは、ここで初めて動きを見る
-                MotionEvent.ACTION_DOWN -> if (velocity == null) velocity = VelocityTracker.obtain().also { it.addMovement(ev) }
                 MotionEvent.ACTION_MOVE -> if (detect(ev).let { mode == 1 }) drawer.translationY = (height + dy).coerceIn(0f, height.toFloat())
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     velocity?.computeCurrentVelocity(1000)
