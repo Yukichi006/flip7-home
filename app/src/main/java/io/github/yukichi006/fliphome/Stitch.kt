@@ -89,19 +89,42 @@ fun Context.dpi(v: Float): Int = dp(v).roundToInt()
 fun Context.sp(v: Float): Float = v * resources.displayMetrics.scaledDensity
 
 /**
- * ステッチ（ミシンの縫い目）の線を描く筆。点線を丸い端で描き、下に濃い影を落とす。
- * [width]・[dash]・[gap] はピクセル。
+ * 糸の太さ（設定で選ぶ）。[scale] が 1 でいちばん太く（最初の太さ）、小さいほど細い。
+ * 細い糸ほど、縫い目の長さも少しだけ短くする。
  */
-fun stitchPaint(width: Float, dash: Float, gap: Float, color: Int = Thread.COLOR): Paint =
-    Paint(Paint.ANTI_ALIAS_FLAG).apply {
+object StitchStyle {
+    var scale = 1f
+
+    val CHOICES = listOf(1f to "太い（最初の太さ）", 0.82f to "ふつう", 0.66f to "細い", 0.5f to "とても細い")
+
+    fun label(scale: Float) = CHOICES.minByOrNull { kotlin.math.abs(it.first - scale) }?.second ?: "太い"
+}
+
+/**
+ * ステッチ（ミシンの縫い目）の線を描く筆。点線を丸い端で描き、下に濃い影を落とす。
+ * [width]・[dash]・[gap] はピクセル（いちばん太い糸のときの値で、設定した糸の太さに合わせて細くする）。
+ */
+fun stitchPaint(width: Float, dash: Float, gap: Float, color: Int = Thread.COLOR): Paint {
+    val w = width * StitchStyle.scale
+    val len = 0.65f + 0.35f * StitchStyle.scale
+    return Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = width
+        strokeWidth = w
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
         this.color = color
-        pathEffect = DashPathEffect(floatArrayOf(dash, gap), 0f)
-        setShadowLayer(width * 0.35f, 0f, width * 0.55f, Thread.SHADOW)
+        pathEffect = DashPathEffect(floatArrayOf(dash * len, gap * len), 0f)
+        setShadowLayer(w * 0.35f, 0f, w * 0.55f, Thread.SHADOW)
     }
+}
+
+/** 画面のいちばん外側を、画面の角の丸みに沿ってぐるりと縫う。 */
+fun android.view.View.drawScreenSeam(canvas: Canvas, paint: Paint) {
+    val inset = dp(5f)
+    val corner = rootWindowInsets?.getRoundedCorner(android.view.RoundedCorner.POSITION_TOP_LEFT)?.radius?.toFloat() ?: dp(26f)
+    val r = (corner - inset).coerceAtLeast(dp(12f))
+    canvas.drawRoundRect(inset, inset, width - inset, height - inset, r, r, paint)
+}
 
 /** 画面の大きさに合わせた、標準のステッチの筆。 */
 fun Context.stitch(widthDp: Float = 1.3f, color: Int = Thread.COLOR): Paint =

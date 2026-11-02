@@ -137,7 +137,7 @@ object GenreIcons {
     private val cache = LruCache<String, Bitmap>(80)
     private val paths = mutableMapOf<Genre, Path>()
 
-    fun bitmap(genre: Genre, size: Int): Bitmap = cache.get("$genre:$size") ?: run {
+    fun bitmap(genre: Genre, size: Int): Bitmap = cache.get("$genre:$size:${StitchStyle.scale}") ?: run {
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val path = Path(path(genre))
@@ -148,7 +148,7 @@ object GenreIcons {
             postTranslate(inset, inset)
         })
         canvas.drawPath(path, stitchPaint(size * 0.05f, size * 0.105f, size * 0.075f))
-        bitmap.also { cache.put("$genre:$size", it) }
+        bitmap.also { cache.put("$genre:$size:${StitchStyle.scale}", it) }
     }
 
     private fun path(genre: Genre): Path = paths.getOrPut(genre) { MiniPath.parse(genre.path) }

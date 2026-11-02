@@ -61,6 +61,7 @@ class HomeActivity : Activity() {
         ready = true
 
         store = LayoutStore(this)
+        StitchStyle.scale = store.thread
         repo = AppRepository(this)
         repo.start()
         if (store.home.dock.all { it == null } && !getSharedPreferences("home", 0).getBoolean("dockInit", false)) {
@@ -190,8 +191,11 @@ class HomeActivity : Activity() {
     // ホーム画面の組み立て
     // ------------------------------------------------------------------
 
+    private var peelFrom = PeelFrom.DEFAULT
+
     private fun rebuildHome() {
         val home = store.home
+        peelFrom = store.peel
         page = page.coerceIn(0, home.pages.size - 1)
         grid.configure(home.cols, home.rows)
         grid.removeAllViews()
@@ -202,7 +206,7 @@ class HomeActivity : Activity() {
                 ModuleType.BATTERY -> BatteryPatch(this)
                 // アンインストールされたアプリ（や一時的に使えない仕事用のアプリ）は表示しないだけで、配置は残す
                 ModuleType.APP -> m[Module.P_APP]?.let { repo.find(it) }?.let { app ->
-                    PadView(this, app, repo, second = m[Module.P_LONG_APP]?.let { repo.find(it) }) { enterEdit() }
+                    PadView(this, app, repo, second = m[Module.P_LONG_APP]?.let { repo.find(it) }, peel = peelFrom) { enterEdit() }
                 } ?: continue
                 ModuleType.FOLDER -> FolderPouch(this, m[Module.P_NAME] ?: "フォルダ",
                     m.folderApps.mapNotNull { repo.find(it)?.component?.packageName },
@@ -420,6 +424,19 @@ class HomeActivity : Activity() {
             rebuildHome()
             true
         }
+        val peelMenu = menu.addSubMenu("裏地をめくる向き（いま：${store.peel.label}）")
+        for (p in PeelFrom.entries) {
+            peelMenu.add(p.label).setOnMenuItemClickListener { store.peel = p; rebuildHome(); true }
+        }
+        val threadMenu = menu.addSubMenu("糸の太さ（いま：${StitchStyle.label(store.thread)}）")
+        for ((scale, name) in StitchStyle.CHOICES) {
+            threadMenu.add(name).setOnMenuItemClickListener {
+                store.thread = scale
+                // 糸はあちこちで使っているので、画面をまるごと作り直す
+                recreate()
+                true
+            }
+        }
         menu.add(if (Badges.enabled(this@HomeActivity)) "通知の印：使っています（設定）" else "通知の印を使う…").setOnMenuItemClickListener {
             showBadgeSheet()
             true
@@ -617,7 +634,7 @@ class HomeActivity : Activity() {
                 second?.let { "裏地のアプリをやめる" to { store.replace(page, m.with(Module.P_LONG_APP, null)); done() } },
             ) + appItems(app, s) + pageMoveItems(m) + listOf(
                 "外す" to { store.remove(page, m); done() },
-            ), note = "裏地のアプリを決めると、パッドの右下の角が少しめくれます。角をつまんで左上へめくると、裏地のアプリが見え、めくりきって離すと開きます。"))
+            ), note = "裏地のアプリを決めると、パッドの端が少しめくれます。そこをつまんでめくると裏地のアプリが見え、めくりきって離すと開きます。めくる向きは「…」→「裏地をめくる向き」で変えられます。"))
         }
     }
 
@@ -825,6 +842,7 @@ class HomeActivity : Activity() {
      */
     private inner class HomeRoot(context: Context) : FrameLayout(context) {
         private val fabric = Fabric.paint(context, Cloth.BASE)
+        private val seam = context.stitch(1.4f)
         private val slop = ViewConfiguration.get(context).scaledTouchSlop
         private var downX = 0f
         private var downY = 0f
@@ -833,7 +851,11 @@ class HomeActivity : Activity() {
 
         init { setWillNotDraw(false) }
 
-        override fun onDraw(canvas: Canvas) = canvas.drawPaint(fabric)
+        override fun onDraw(canvas: Canvas) {
+            canvas.drawPaint(fabric)
+            // 画面全体をステッチでぐるりと囲む
+            drawScreenSeam(canvas, seam)
+        }
 
         private fun swipesAllowed() = !editing && sheet == null && popover == null &&
             !(drawer.visibility == View.VISIBLE && drawer.translationY == 0f)

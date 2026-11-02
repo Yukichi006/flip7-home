@@ -102,7 +102,12 @@ class DrawerView(
         applyInsets(0, 0)
     }
 
-    override fun onDraw(canvas: Canvas) = canvas.drawPaint(fabric)
+    private val seam = context.stitch(1.4f)
+
+    override fun onDraw(canvas: Canvas) {
+        canvas.drawPaint(fabric)
+        drawScreenSeam(canvas, seam)
+    }
 
     fun applyInsets(top: Int, bottom: Int) {
         insetTop = top

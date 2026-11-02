@@ -36,12 +36,39 @@ fun drawKnot(canvas: Canvas, context: Context, cx: Float, cy: Float) {
 }
 
 /**
+ * 裏地をめくり始める側（8 方向）。[sx], [sy] は始まる側（-1：左・上、0：真ん中、1：右・下）。
+ * 角から始めるものは角を斜めにめくり、辺から始めるものは辺をまっすぐ折り返す。
+ */
+enum class PeelFrom(val key: String, val label: String, val sx: Int, val sy: Int) {
+    TOP("t", "上から下", 0, -1),
+    TOP_RIGHT("tr", "右上から左下", 1, -1),
+    RIGHT("r", "右から左", 1, 0),
+    BOTTOM_RIGHT("br", "右下から左上", 1, 1),
+    BOTTOM("b", "下から上", 0, 1),
+    BOTTOM_LEFT("bl", "左下から右上", -1, 1),
+    LEFT("l", "左から右", -1, 0),
+    TOP_LEFT("tl", "左上から右下", -1, -1),
+    ;
+
+    val corner get() = sx != 0 && sy != 0
+
+    /** めくっていく向き（単位ベクトル）。 */
+    val ux: Float get() = -sx / kotlin.math.hypot(sx.toFloat(), sy.toFloat())
+    val uy: Float get() = -sy / kotlin.math.hypot(sx.toFloat(), sy.toFloat())
+
+    companion object {
+        val DEFAULT = TOP
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: DEFAULT
+    }
+}
+
+/**
  * アプリのパッド。[framed] なら 1 マスのワッペン（フェルトの布にステッチの縁取り）に載せ、
  * 刺繍アイコンと小さなアプリ名を描く。通知が来ていれば右上に糸の玉を付ける。
  *
  * - タップ：アプリを開く
- * - 右下の角をつまんで左上へめくる：裏地に縫い付けた 2 つ目のアプリ（[second]）が見え、めくりきって離すと開く。
- *   2 つ目のアプリがあるパッドは、右下の角が少しだけめくれている（裏地がのぞく）
+ * - [peel] の側からつまんでめくる：裏地に縫い付けた 2 つ目のアプリ（[second]）が見え、めくりきって離すと開く。
+ *   2 つ目のアプリがあるパッドは、めくる側が少しだけめくれている（裏地がのぞく）
  * - 長押し：[onLongPress]（編集モードに入る）
  */
 @SuppressLint("ViewConstructor")
@@ -51,6 +78,7 @@ class PadView(
     private val repo: AppRepository,
     private val second: AppEntry? = null,
     private val framed: Boolean = true,
+    private val peel: PeelFrom = PeelFrom.DEFAULT,
     private val onLongPress: () -> Unit,
 ) : View(context), SewAware {
     private val patch = PatchPainter(context, PatchPainter.Shape.Round(16f))
@@ -72,11 +100,12 @@ class PadView(
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
     private var downY = 0f
-    private var corner = false
+    private var inZone = false
     private var peeling = false
     private var armed = false
 
-    /** めくっている指の位置（めくっていないときは null で、角が少しだけめくれた形を描く）。 */
+    /** めくり始めた所（角、または辺の上の点）と、めくっている指の位置。null なら少しだけめくれた待機の形。 */
+    private var anchor: Pair<Float, Float>? = null
     private var finger: Pair<Float, Float>? = null
     private var settle: android.animation.ValueAnimator? = null
 
@@ -102,6 +131,29 @@ class PadView(
     private fun patchRect() = RectF(patch.margin, patch.margin, width - patch.margin, height - patch.margin)
     private fun canPeel() = second != null && framed
 
+    /** めくり始められる範囲（めくる側の半分。辺の場合は辺に近い帯）。 */
+    private fun zone(x: Float, y: Float): Boolean {
+        val okX = when (peel.sx) { 1 -> x > width * 0.5f; -1 -> x < width * 0.5f; else -> true }
+        val okY = when (peel.sy) { 1 -> y > height * 0.5f; -1 -> y < height * 0.5f; else -> true }
+        return okX && okY
+    }
+
+    /** めくり始める所：角なら角、辺なら指の真横の辺の上の点。 */
+    private fun startPoint(r: RectF, x: Float, y: Float): Pair<Float, Float> {
+        val cx = when (peel.sx) { 1 -> r.right; -1 -> r.left; else -> x.coerceIn(r.left, r.right) }
+        val cy = when (peel.sy) { 1 -> r.bottom; -1 -> r.top; else -> y.coerceIn(r.top, r.bottom) }
+        return cx to cy
+    }
+
+    /** 指の位置を、めくった先の点にする（辺から始めるときは、めくる向きの分だけを使う）。 */
+    private fun peelPoint(r: RectF, c: Pair<Float, Float>, x: Float, y: Float): Pair<Float, Float> {
+        if (peel.corner) return x.coerceIn(r.left, r.right) to y.coerceIn(r.top, r.bottom)
+        val t = ((x - c.first) * peel.ux + (y - c.second) * peel.uy).coerceIn(0f, extent(r))
+        return (c.first + peel.ux * t) to (c.second + peel.uy * t)
+    }
+
+    private fun extent(r: RectF) = if (peel.corner) kotlin.math.hypot(r.width(), r.height()) else if (peel.sx != 0) r.width() else r.height()
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
@@ -111,25 +163,28 @@ class PadView(
                 peeling = false
                 armed = false
                 settle?.cancel()
-                // 右下の角のあたりをつまんだときだけ、めくれるようにする
-                corner = canPeel() && event.x > width * 0.5f && event.y > height * 0.5f
-                if (corner) parent?.requestDisallowInterceptTouchEvent(true)
+                inZone = canPeel() && zone(event.x, event.y)
+                if (inZone) parent?.requestDisallowInterceptTouchEvent(true)
                 animate().scaleX(0.96f).scaleY(0.96f).setDuration(90).start()
             }
             MotionEvent.ACTION_MOVE -> {
-                if (corner && !peeling && (downX - event.x > slop || downY - event.y > slop)) {
+                val dx = event.x - downX
+                val dy = event.y - downY
+                val along = dx * peel.ux + dy * peel.uy
+                val across = kotlin.math.abs(-dx * peel.uy + dy * peel.ux)
+                if (inZone && !peeling && along > slop && along > across * 0.6f) {
                     peeling = true
+                    anchor = startPoint(patchRect(), downX, downY)
                     super.onTouchEvent(MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL })
                     animate().scaleX(1f).scaleY(1f).setDuration(80).start()
-                }
-                if (corner && !peeling && (event.x - downX > slop || event.y - downY > slop)) {
-                    // 角から外へ引いた（めくる向きではない）：ホーム画面のスワイプに任せる
-                    corner = false
+                } else if (inZone && !peeling && (along < -slop || across > slop * 2)) {
+                    // めくる向きではない：ホーム画面のスワイプ（ページ・一覧・通知）に任せる
+                    inZone = false
                     parent?.requestDisallowInterceptTouchEvent(false)
                 }
                 if (peeling) {
                     val r = patchRect()
-                    finger = event.x.coerceIn(r.left, r.right) to event.y.coerceIn(r.top, r.bottom)
+                    finger = peelPoint(r, anchor!!, event.x, event.y)
                     val nowArmed = peelAmount() > 0.5f
                     if (nowArmed != armed) {
                         armed = nowArmed
@@ -153,18 +208,18 @@ class PadView(
         return super.onTouchEvent(event)
     }
 
-    /** めくった量（0〜1。対角線の長さに対する、角から指までの長さ）。 */
+    /** めくった量（0〜1。めくれる長さに対する、始めた所から指までの長さ）。 */
     private fun peelAmount(): Float {
         val f = finger ?: return 0f
-        val r = patchRect()
-        return (kotlin.math.hypot(r.right - f.first, r.bottom - f.second) / kotlin.math.hypot(r.width(), r.height())).toFloat()
+        val c = anchor ?: return 0f
+        return (kotlin.math.hypot(c.first - f.first, c.second - f.second) / extent(patchRect()))
     }
 
-    /** 離したら、布がふわっと角へ戻る。 */
+    /** 離したら、布がふわっと元へ戻る。 */
     private fun settleBack() {
         val f = finger ?: return
-        val r = patchRect()
-        val rest = restFinger(r)
+        val c = anchor ?: return
+        val rest = (c.first + peel.ux * restDepth()) to (c.second + peel.uy * restDepth())
         settle = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 260
             interpolator = OvershootInterpolator(1.2f)
@@ -174,14 +229,14 @@ class PadView(
                 invalidate()
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) { finger = null; invalidate() }
+                override fun onAnimationEnd(animation: android.animation.Animator) { finger = null; anchor = null; invalidate() }
             })
             start()
         }
     }
 
-    /** 何もしていないときの、少しだけめくれた角（犬の耳）の指の位置。 */
-    private fun restFinger(r: RectF) = (r.right - context.dp(13f)) to (r.bottom - context.dp(13f))
+    /** 待機中に少しだけめくれている深さ（角は犬の耳、辺は細い折り返し）。 */
+    private fun restDepth() = if (peel.corner) dp(18f) else dp(7f)
 
     override fun onDraw(canvas: Canvas) {
         val alpha = Sewing.contentAlpha()
@@ -191,11 +246,10 @@ class PadView(
             return
         }
         val r = patchRect()
-        val f = finger ?: restFinger(r)
-        val cx = r.right
-        val cy = r.bottom
-        var nx = cx - f.first
-        var ny = cy - f.second
+        val c = anchor ?: startPoint(r, r.centerX(), r.centerY())
+        val f = finger ?: ((c.first + peel.ux * restDepth()) to (c.second + peel.uy * restDepth()))
+        var nx = c.first - f.first
+        var ny = c.second - f.second
         val len = kotlin.math.hypot(nx, ny)
         if (len < 1f) {
             patch.draw(canvas, width, height)
@@ -203,8 +257,8 @@ class PadView(
             return
         }
         nx /= len; ny /= len
-        val mx = (cx + f.first) / 2f
-        val my = (cy + f.second) / 2f
+        val mx = (c.first + f.first) / 2f
+        val my = (c.second + f.second) / 2f
         val shape = Path().apply { addRoundRect(r, dp(16f), dp(16f), Path.Direction.CW) }
         val cornerSide = halfPlane(mx, my, nx, ny, +1f)
         val frontSide = halfPlane(mx, my, nx, ny, -1f)

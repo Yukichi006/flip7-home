@@ -231,6 +231,16 @@ class LayoutStore(context: Context) {
         home = home.copy(dock = list)
     }
 
+    /** 裏地をめくり始める側。 */
+    var peel: PeelFrom
+        get() = PeelFrom.of(prefs.getString("peel", null))
+        set(value) = prefs.edit().putString("peel", value.key).apply()
+
+    /** 糸の太さ（1 がいちばん太い）。 */
+    var thread: Float
+        get() = prefs.getFloat("thread", 1f)
+        set(value) = prefs.edit().putFloat("thread", value).apply()
+
     /** アプリの名前の付け替え。付け替えていなければ null。 */
     fun nameOf(key: String): String? = prefs.getString("name:$key", null)
 
