@@ -26,7 +26,7 @@ import kotlin.math.abs
 import kotlin.math.max
 
 /**
- * ホーム画面。上から、マス目に並べた部品（パッド・ノブ・時計・予定・電池）、ページの点、下段のポケット。
+ * ホーム画面。上から、マス目に並べた部品（パッド・巾着・時計・予定・電池など）、ページの点、下段のポケット。
  *
  * - 左右へスワイプ：ページを移る
  * - 上へスワイプ：アプリ一覧を開く
@@ -204,7 +204,7 @@ class HomeActivity : Activity() {
                 ModuleType.APP -> m[Module.P_APP]?.let { repo.find(it) }?.let { app ->
                     PadView(this, app, repo, second = m[Module.P_LONG_APP]?.let { repo.find(it) }) { enterEdit() }
                 } ?: continue
-                ModuleType.FOLDER -> FolderKnob(this, m[Module.P_NAME] ?: "フォルダ",
+                ModuleType.FOLDER -> FolderPouch(this, m[Module.P_NAME] ?: "フォルダ",
                     m.folderApps.mapNotNull { repo.find(it)?.component?.packageName },
                     onOpen = { v -> showFolder(m, v) }, onLongPress = { enterEdit() })
                 ModuleType.TIME -> TimeView(this, Align.parse(m[Module.P_ALIGN], "mr"), m[Module.P_SECONDS] == "1")
@@ -293,7 +293,7 @@ class HomeActivity : Activity() {
     // ページ
     // ------------------------------------------------------------------
 
-    /** [target] のページへ移る。横にすべらせて入れ替え、ノブを慣性で少し回す。 */
+    /** [target] のページへ移る。今のページを横にすべらせて片付け、新しいページを縫い上げ、巾着を少し揺らす。 */
     private fun goToPage(target: Int) {
         val count = store.home.pages.size
         val t = target.coerceIn(0, count - 1)
@@ -307,32 +307,34 @@ class HomeActivity : Activity() {
             page = t
             rebuildHome()
             grid.translationX = -dir * w
-            grid.animate().translationX(0f).setDuration(180).setInterpolator(DecelerateInterpolator()).start()
-            spinKnobs(dir)
+            grid.translationX = 0f
+            // 新しいページの部品を、ミシンで縫い上げるように出す
+            Sewing.start((0 until grid.childCount).map { grid.getChildAt(it) }, grid)
+            swayPouches(dir)
         }.start()
     }
 
-    private fun spinKnobs(dir: Int) {
+    /** ページを移ると、巾着が慣性で少し揺れる。 */
+    private fun swayPouches(dir: Int) {
         for (i in 0 until grid.childCount) {
-            val knob = grid.getChildAt(i) as? FolderKnob ?: continue
-            android.animation.ValueAnimator.ofFloat(0f, -dir * 140f).apply {
-                duration = 700
-                interpolator = DecelerateInterpolator(2f)
-                addUpdateListener { knob.spin = it.animatedValue as Float }
+            val pouch = grid.getChildAt(i) as? FolderPouch ?: continue
+            android.animation.ValueAnimator.ofFloat(0f, -dir * 12f, dir * 6f, -dir * 2f, 0f).apply {
+                duration = 900
+                addUpdateListener { pouch.sway = it.animatedValue as Float }
                 start()
             }
         }
     }
 
     // ------------------------------------------------------------------
-    // ノブ（フォルダ）
+    // 巾着（フォルダ）
     // ------------------------------------------------------------------
 
     private fun showFolder(m: Module, anchor: View) {
         popover?.dismiss()
         val apps = m.folderApps.mapNotNull { repo.find(it) }
         if (apps.isEmpty()) {
-            toast("フォルダは空です。長押しして編集モードから、アプリを入れてください")
+            toast("巾着は空です。長押しして編集モードから、アプリを入れてください")
             return
         }
         val pads = apps.map { app -> PadView(this, app, repo, framed = false) { } }
@@ -608,14 +610,14 @@ class HomeActivity : Activity() {
                 "アプリを変える" to {
                     s.setBody(AppPicker(this, repo) { new -> store.replace(page, m.with(Module.P_APP, new.key)); done() })
                 },
-                (if (second == null) "下に引いて開くアプリを決める" else "下に引いて開くアプリ（いま：${repo.label(second)}）") to {
+                (if (second == null) "裏地のアプリを決める" else "裏地のアプリ（いま：${repo.label(second)}）") to {
                     s.setBody(AppPicker(this, repo) { new -> store.replace(page, m.with(Module.P_LONG_APP, new.key)); done() })
                 },
             ) + listOfNotNull(
-                second?.let { "下に引いて開くアプリをやめる" to { store.replace(page, m.with(Module.P_LONG_APP, null)); done() } },
+                second?.let { "裏地のアプリをやめる" to { store.replace(page, m.with(Module.P_LONG_APP, null)); done() } },
             ) + appItems(app, s) + pageMoveItems(m) + listOf(
                 "外す" to { store.remove(page, m); done() },
-            ), note = "下に引いて開くアプリを決めると、パッドを下に引っ張ったときにそのアプリが開きます。"))
+            ), note = "裏地のアプリを決めると、パッドの右下の角が少しめくれます。角をつまんで左上へめくると、裏地のアプリが見え、めくりきって離すと開きます。"))
         }
     }
 
@@ -634,10 +636,10 @@ class HomeActivity : Activity() {
         "アプリ情報・アンインストール" to { repo.openDetails(app) },
     )
 
-    /** ノブ（フォルダ）の設定。 */
+    /** 巾着（フォルダ）の設定。 */
     private fun folderSheet(m: Module) {
         val name = m[Module.P_NAME] ?: "フォルダ"
-        openSheet("ノブ：$name") { s ->
+        openSheet("巾着：$name") { s ->
             s.setTabs(emptyList(), 0) {}
             s.setBody(actionList(this, listOf(
                 "中のアプリを選ぶ（いま ${m.folderApps.size} 個）" to {
@@ -653,7 +655,7 @@ class HomeActivity : Activity() {
                     })
                 },
             ) + pageMoveItems(m) + listOf("外す" to { store.remove(page, m); done() }),
-                note = "ホーム画面でノブをタップすると、中のアプリが吹き出しで開きます。"))
+                note = "ホーム画面で巾着をタップすると、口が開いて中のアプリが出てきます。"))
         }
     }
 

@@ -47,9 +47,16 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
     /** 布の内側（中身を置ける範囲）の余白。 */
     val contentPadding: Float get() = margin + inset + context.dp(8f)
 
+    private val measure = android.graphics.PathMeasure()
+    private val partial = Path()
+
     fun draw(canvas: Canvas, w: Int, h: Int) {
         rect.set(margin, margin, w - margin, h - margin)
         if (rect.width() <= 0 || rect.height() <= 0) return
+        // 縫い上がりの途中は、布をうっすら出し、縁のステッチを端から少しずつ縫う
+        val p = Sewing.progress
+        val clothAlpha = if (p >= 1f) 255 else (p * 1.6f).coerceAtMost(1f).times(255).toInt()
+        shadow.alpha = clothAlpha; felt.alpha = clothAlpha; rim.alpha = clothAlpha / 20
         outline(path, rect)
         canvas.drawPath(path, shadow)
         canvas.drawPath(path, felt)
@@ -59,7 +66,14 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
         when (shape) {
             is Shape.Round -> {
                 outline(path, rect)
-                canvas.drawPath(path, stitch)
+                if (p >= 1f) {
+                    canvas.drawPath(path, stitch)
+                } else {
+                    measure.setPath(path, true)
+                    partial.reset()
+                    measure.getSegment(0f, measure.length * p, partial, true)
+                    canvas.drawPath(partial, stitch)
+                }
             }
             Shape.Pocket -> {
                 val gap = context.dp(5f)
@@ -99,13 +113,16 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
 }
 
 /** 中身を自分で描くワッペン。 */
-abstract class PatchView(context: Context, shape: PatchPainter.Shape = PatchPainter.Shape.Round(18f)) : View(context) {
+abstract class PatchView(context: Context, shape: PatchPainter.Shape = PatchPainter.Shape.Round(18f)) : View(context), SewAware {
     protected val patch = PatchPainter(context, shape)
 
     final override fun onDraw(canvas: Canvas) {
         patch.draw(canvas, width, height)
         val p = patch.contentPadding
+        val alpha = Sewing.contentAlpha()
+        val save = if (alpha < 255) canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), alpha) else -1
         drawContent(canvas, RectF(p, p, width - p, height - p))
+        if (save >= 0) canvas.restoreToCount(save)
     }
 
     abstract fun drawContent(canvas: Canvas, area: RectF)

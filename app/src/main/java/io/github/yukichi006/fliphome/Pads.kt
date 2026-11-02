@@ -40,7 +40,8 @@ fun drawKnot(canvas: Canvas, context: Context, cx: Float, cy: Float) {
  * 刺繍アイコンと小さなアプリ名を描く。通知が来ていれば右上に糸の玉を付ける。
  *
  * - タップ：アプリを開く
- * - 下に引っ張る：2 つ目のアプリ（[second]）を開く。ゴムのように伸び、引ききると 2 つ目のアプリの絵に変わる
+ * - 右下の角をつまんで左上へめくる：裏地に縫い付けた 2 つ目のアプリ（[second]）が見え、めくりきって離すと開く。
+ *   2 つ目のアプリがあるパッドは、右下の角が少しだけめくれている（裏地がのぞく）
  * - 長押し：[onLongPress]（編集モードに入る）
  */
 @SuppressLint("ViewConstructor")
@@ -51,19 +52,33 @@ class PadView(
     private val second: AppEntry? = null,
     private val framed: Boolean = true,
     private val onLongPress: () -> Unit,
-) : View(context) {
+) : View(context), SewAware {
     private val patch = PatchPainter(context, PatchPainter.Shape.Round(16f))
     private val label = context.threadText(9.5f).apply {
         textAlign = Paint.Align.CENTER
         letterSpacing = 0.02f
     }
-    private val hint = context.stitch(1.0f, Thread.DIM)
+    private val lining = Fabric.paint(context, Cloth.LINING)
+    private val back = Fabric.paint(context, Cloth.BACK)
+    private val flapShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Cloth.BACK
+        setShadowLayer(context.dp(6f), 0f, context.dp(2f), 0xD0000000.toInt())
+    }
+    private val foldLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x40FFFFFF
+        strokeWidth = context.dp(1f)
+    }
+    private val backStitch = context.stitch(1.0f, Thread.DIM)
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
     private var downY = 0f
-    private var pulling = false
-    private var pull = 0f
+    private var corner = false
+    private var peeling = false
     private var armed = false
+
+    /** めくっている指の位置（めくっていないときは null で、角が少しだけめくれた形を描く）。 */
+    private var finger: Pair<Float, Float>? = null
+    private var settle: android.animation.ValueAnimator? = null
 
     private val badgeListener: () -> Unit = { invalidate() }
 
@@ -71,7 +86,6 @@ class PadView(
         setOnClickListener { repo.launch(app, this) }
         setOnLongClickListener { onLongPress(); true }
         contentDescription = repo.label(app)
-        pivotY = 0f
     }
 
     override fun onAttachedToWindow() {
@@ -81,11 +95,12 @@ class PadView(
 
     override fun onDetachedFromWindow() {
         Badges.removeListener(badgeListener)
+        settle?.cancel()
         super.onDetachedFromWindow()
     }
 
-    /** 引っ張りきったとみなす長さ。 */
-    private fun threshold() = height * 0.32f
+    private fun patchRect() = RectF(patch.margin, patch.margin, width - patch.margin, height - patch.margin)
+    private fun canPeel() = second != null && framed
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -93,40 +108,44 @@ class PadView(
             MotionEvent.ACTION_DOWN -> {
                 downX = event.x
                 downY = event.y
-                pulling = false
+                peeling = false
                 armed = false
-                animate().cancel()
-                animate().scaleX(0.95f).setDuration(90).start()
+                settle?.cancel()
+                // 右下の角のあたりをつまんだときだけ、めくれるようにする
+                corner = canPeel() && event.x > width * 0.5f && event.y > height * 0.5f
+                if (corner) parent?.requestDisallowInterceptTouchEvent(true)
+                animate().scaleX(0.96f).scaleY(0.96f).setDuration(90).start()
             }
             MotionEvent.ACTION_MOVE -> {
-                val dy = event.y - downY
-                if (!pulling && second != null && dy > slop && dy > abs(event.x - downX)) {
-                    // 下に引っ張り始めた：ホーム画面のスワイプ（通知を開く）に取られないようにする
-                    pulling = true
-                    parent?.requestDisallowInterceptTouchEvent(true)
+                if (corner && !peeling && (downX - event.x > slop || downY - event.y > slop)) {
+                    peeling = true
                     super.onTouchEvent(MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL })
+                    animate().scaleX(1f).scaleY(1f).setDuration(80).start()
                 }
-                if (pulling) {
-                    // ゴムのように、引くほど伸びにくくする
-                    pull = (dy.coerceAtLeast(0f) * 0.5f).coerceAtMost(height * 0.55f)
-                    scaleY = 1f + pull / height
-                    val nowArmed = pull >= threshold()
+                if (corner && !peeling && (event.x - downX > slop || event.y - downY > slop)) {
+                    // 角から外へ引いた（めくる向きではない）：ホーム画面のスワイプに任せる
+                    corner = false
+                    parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                if (peeling) {
+                    val r = patchRect()
+                    finger = event.x.coerceIn(r.left, r.right) to event.y.coerceIn(r.top, r.bottom)
+                    val nowArmed = peelAmount() > 0.5f
                     if (nowArmed != armed) {
                         armed = nowArmed
                         performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                        invalidate()
                     }
+                    invalidate()
                     return true
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                animate().scaleX(1f).scaleY(1f).setInterpolator(OvershootInterpolator(2.5f)).setDuration(260).start()
-                if (pulling) {
+                animate().scaleX(1f).scaleY(1f).setInterpolator(OvershootInterpolator(2f)).setDuration(220).start()
+                if (peeling) {
                     if (armed && event.actionMasked == MotionEvent.ACTION_UP) second?.let { repo.launch(it, this) }
-                    pulling = false
+                    peeling = false
                     armed = false
-                    pull = 0f
-                    invalidate()
+                    settleBack()
                     return true
                 }
             }
@@ -134,65 +153,183 @@ class PadView(
         return super.onTouchEvent(event)
     }
 
+    /** めくった量（0〜1。対角線の長さに対する、角から指までの長さ）。 */
+    private fun peelAmount(): Float {
+        val f = finger ?: return 0f
+        val r = patchRect()
+        return (kotlin.math.hypot(r.right - f.first, r.bottom - f.second) / kotlin.math.hypot(r.width(), r.height())).toFloat()
+    }
+
+    /** 離したら、布がふわっと角へ戻る。 */
+    private fun settleBack() {
+        val f = finger ?: return
+        val r = patchRect()
+        val rest = restFinger(r)
+        settle = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 260
+            interpolator = OvershootInterpolator(1.2f)
+            addUpdateListener {
+                val t = it.animatedValue as Float
+                finger = (f.first + (rest.first - f.first) * t) to (f.second + (rest.second - f.second) * t)
+                invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) { finger = null; invalidate() }
+            })
+            start()
+        }
+    }
+
+    /** 何もしていないときの、少しだけめくれた角（犬の耳）の指の位置。 */
+    private fun restFinger(r: RectF) = (r.right - context.dp(13f)) to (r.bottom - context.dp(13f))
+
     override fun onDraw(canvas: Canvas) {
-        if (framed) patch.draw(canvas, width, height)
-        // 引っ張りきったら、2 つ目のアプリの絵と名前に変える
-        val shown = if (armed && second != null) second else app
-        // ワッペンの縁のステッチにかからないよう、内側に余白を取る
-        val inner = if (framed) patch.margin + context.dp(9f) else context.dp(2f)
+        val alpha = Sewing.contentAlpha()
+        if (!canPeel()) {
+            if (framed) patch.draw(canvas, width, height)
+            withAlpha(canvas, alpha) { drawFace(canvas, app, withBadge = true) }
+            return
+        }
+        val r = patchRect()
+        val f = finger ?: restFinger(r)
+        val cx = r.right
+        val cy = r.bottom
+        var nx = cx - f.first
+        var ny = cy - f.second
+        val len = kotlin.math.hypot(nx, ny)
+        if (len < 1f) {
+            patch.draw(canvas, width, height)
+            withAlpha(canvas, alpha) { drawFace(canvas, app, withBadge = true) }
+            return
+        }
+        nx /= len; ny /= len
+        val mx = (cx + f.first) / 2f
+        val my = (cy + f.second) / 2f
+        val shape = Path().apply { addRoundRect(r, dp(16f), dp(16f), Path.Direction.CW) }
+        val cornerSide = halfPlane(mx, my, nx, ny, +1f)
+        val frontSide = halfPlane(mx, my, nx, ny, -1f)
+        // 1) めくれて見えた所：裏地の布と、2 つ目のアプリ
+        val revealed = Path(shape).apply { op(cornerSide, Path.Op.INTERSECT) }
+        canvas.save()
+        canvas.clipPath(revealed)
+        canvas.drawPath(shape, lining)
+        withAlpha(canvas, alpha) { drawFace(canvas, second!!, withBadge = false) }
+        canvas.restore()
+        // 2) 表の布（めくれていない所）
+        canvas.save()
+        canvas.clipPath(frontSide)
+        patch.draw(canvas, width, height)
+        withAlpha(canvas, alpha) { drawFace(canvas, app, withBadge = true) }
+        canvas.restore()
+        // 3) めくれた布の裏側（折り目で裏返した形）
+        val angle = Math.toDegrees(kotlin.math.atan2(nx.toDouble(), -ny.toDouble())).toFloat()
+        val reflect = android.graphics.Matrix().apply {
+            postTranslate(-mx, -my)
+            postRotate(-angle)
+            postScale(1f, -1f)
+            postRotate(angle)
+            postTranslate(mx, my)
+        }
+        val flap = Path(shape).apply { op(cornerSide, Path.Op.INTERSECT); transform(reflect) }
+        canvas.drawPath(flap, flapShadow)
+        canvas.drawPath(flap, back)
+        canvas.save()
+        canvas.clipPath(flap)
+        canvas.concat(reflect)
+        val inset = RectF(r).apply { inset(dp(5f), dp(5f)) }
+        canvas.drawRoundRect(inset, dp(11f), dp(11f), backStitch)
+        canvas.restore()
+        // 折り目の光
+        canvas.save()
+        canvas.clipPath(shape)
+        canvas.drawLine(mx - ny * 1000, my + nx * 1000, mx + ny * 1000, my - nx * 1000, foldLine)
+        canvas.restore()
+    }
+
+    /** 点 ([mx], [my]) を通り、向き ([nx], [ny]) に垂直な線で分けた片側（[sign] が + なら角の側）。 */
+    private fun halfPlane(mx: Float, my: Float, nx: Float, ny: Float, sign: Float): Path {
+        val big = (width + height) * 4f
+        val ex = -ny
+        val ey = nx
+        return Path().apply {
+            moveTo(mx + ex * big, my + ey * big)
+            lineTo(mx - ex * big, my - ey * big)
+            lineTo(mx - ex * big + nx * big * sign, my - ey * big + ny * big * sign)
+            lineTo(mx + ex * big + nx * big * sign, my + ey * big + ny * big * sign)
+            close()
+        }
+    }
+
+    private inline fun withAlpha(canvas: Canvas, alpha: Int, block: () -> Unit) {
+        if (alpha >= 255) { block(); return }
+        val save = canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), alpha)
+        block()
+        canvas.restoreToCount(save)
+    }
+
+    /** アイコンとアプリ名（と通知の印）を描く。 */
+    private fun drawFace(canvas: Canvas, shown: AppEntry, withBadge: Boolean) {
+        val inner = if (framed) patch.margin + dp(9f) else dp(2f)
         val labelH = label.textSize * 1.3f
-        val iconPx = min(width - inner * 2, height - inner * 2 - labelH).coerceAtMost(context.dp(46f)).coerceAtLeast(context.dp(16f)).toInt()
-        val total = iconPx + context.dp(3f) + labelH
+        val iconPx = min(width - inner * 2, height - inner * 2 - labelH).coerceAtMost(dp(46f)).coerceAtLeast(dp(16f)).toInt()
+        val total = iconPx + dp(3f) + labelH
         val top = (height - total) / 2f
         canvas.drawBitmap(GenreIcons.bitmap(repo.genre(shown), iconPx), (width - iconPx) / 2f, top, null)
-        val name = repo.label(shown)
-        val text = android.text.TextUtils.ellipsize(name, label, width - inner * 2, android.text.TextUtils.TruncateAt.END)
-        canvas.drawText(text, 0, text.length, width / 2f, top + iconPx + context.dp(3f) + label.textSize, label)
-        // 2 つ目のアプリがあることを、左上の小さな山形のステッチで知らせる
-        if (second != null && framed) {
-            val cx = patch.margin + context.dp(17f)
-            val y = patch.margin + context.dp(15f)
-            val k = context.dp(3f)
-            canvas.drawPath(Path().apply { moveTo(cx - k, y - k * 0.5f); lineTo(cx, y + k * 0.3f); lineTo(cx + k, y - k * 0.5f) }, hint)
-        }
-        if (Badges.count(app.component.packageName) > 0) {
-            val m = if (framed) patch.margin + context.dp(9f) else context.dp(8f)
+        val text = android.text.TextUtils.ellipsize(repo.label(shown), label, width - inner * 2, android.text.TextUtils.TruncateAt.END)
+        canvas.drawText(text, 0, text.length, width / 2f, top + iconPx + dp(3f) + label.textSize, label)
+        if (withBadge && Badges.count(shown.component.packageName) > 0) {
+            val m = if (framed) patch.margin + dp(9f) else dp(8f)
             drawKnot(canvas, context, width - m, m)
         }
     }
 }
 
 /**
- * ノブ（フォルダ）。縫い付けた大きなボタン（4 つ穴に糸を × に渡したもの）と、その下にフォルダの名前。
- * タップで [onOpen]（中のアプリを選ぶ吹き出しを開く）、長押しで [onLongPress]。
+ * フォルダ（巾着袋）。口を紐で絞ったフェルトの袋と、その下にフォルダの名前。
+ * タップで [onOpen]（紐がゆるんで口が開き、中のアプリが袋から出てくる）、長押しで [onLongPress]。
  * 中のアプリのどれかに通知が来ていれば、糸の玉を付ける。
  */
 @SuppressLint("ViewConstructor")
-class FolderKnob(
+class FolderPouch(
     context: Context,
     private val name: String,
     private val packages: List<String>,
     private val onOpen: (View) -> Unit,
     private val onLongPress: () -> Unit,
-) : View(context) {
+) : View(context), SewAware {
     private val felt = Fabric.paint(context, Cloth.FELT)
+    private val inside = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF050505.toInt() }
     private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Cloth.FELT
         setShadowLayer(context.dp(6f), 0f, context.dp(3f), 0xC0000000.toInt())
     }
-    private val rim = context.stitch(1.1f)
-    private val hole = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF050505.toInt() }
-    private val cross = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Thread.COLOR
-        strokeWidth = context.dp(2.2f)
+    private val seam = context.stitch(1.0f)
+    private val gather = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = 0x55000000
+        strokeWidth = context.dp(1.2f)
         strokeCap = Paint.Cap.ROUND
-        setShadowLayer(context.dp(0.6f), 0f, context.dp(1f), Thread.SHADOW)
+    }
+    private val cord = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Thread.COLOR
+        strokeWidth = context.dp(1.8f)
+        strokeCap = Paint.Cap.ROUND
+        setShadowLayer(context.dp(0.8f), 0f, context.dp(1f), Thread.SHADOW)
+    }
+    private val bead = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Thread.COLOR
+        setShadowLayer(context.dp(1f), 0f, context.dp(1f), Thread.SHADOW)
     }
     private val label = context.threadText(9.5f).apply { textAlign = Paint.Align.CENTER }
     private val badgeListener: () -> Unit = { invalidate() }
 
-    /** 回っている角度（ページを移ると、慣性で少し回る）。 */
-    var spin = 0f
+    /** 口の開き具合（0：絞ってある〜1：開いている）。 */
+    var openness = 0f
+        set(value) { field = value; invalidate() }
+
+    /** ページを移ったときに、袋が少し揺れる角度。 */
+    var sway = 0f
         set(value) { field = value; invalidate() }
 
     init {
@@ -204,33 +341,87 @@ class FolderKnob(
     override fun onAttachedToWindow() { super.onAttachedToWindow(); Badges.addListener(badgeListener) }
     override fun onDetachedFromWindow() { Badges.removeListener(badgeListener); super.onDetachedFromWindow() }
 
+    fun animateOpen(open: Boolean) {
+        android.animation.ValueAnimator.ofFloat(openness, if (open) 1f else 0f).apply {
+            duration = if (open) 220 else 180
+            addUpdateListener { openness = it.animatedValue as Float }
+            start()
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
-        val labelH = label.textSize * 1.4f
-        val r = (min(width.toFloat(), height - labelH) / 2f - context.dp(7f)).coerceAtLeast(context.dp(10f))
+        val labelH = label.textSize * 1.5f
+        val s = min(width.toFloat(), height - labelH) - dp(8f)
         val cx = width / 2f
-        val cy = (height - labelH) / 2f + context.dp(2f)
-        canvas.drawCircle(cx, cy, r, shadow)
-        canvas.drawCircle(cx, cy, r, felt)
-        canvas.drawCircle(cx, cy, r - context.dp(4f), rim)
-        // 縁の盛り上がり（ボタンのふち）
-        canvas.drawCircle(cx, cy, r * 0.62f, rim)
-        // 4 つ穴と、縦に 2 本渡した糸（回っている角度の分だけ回す）
+        val top = (height - labelH - s) / 2f + dp(2f)
         canvas.save()
-        canvas.rotate(spin, cx, cy)
-        val d = r * 0.25f
-        val holes = listOf(-d to -d, d to -d, d to d, -d to d)
-        for ((x, y) in holes) canvas.drawCircle(cx + x, cy + y, r * 0.11f, hole)
-        canvas.drawLine(cx - d, cy - d, cx - d, cy + d, cross)
-        canvas.drawLine(cx + d, cy - d, cx + d, cy + d, cross)
+        canvas.rotate(sway, cx, top)
+        val bodyW = s * 0.86f
+        val neckY = top + s * 0.3f
+        val neckW = s * (0.2f + 0.26f * openness)
+        val bottom = top + s
+        // 袋の体：首は細く絞り、下へ向かってふっくら丸く広がる
+        val body = Path().apply {
+            moveTo(cx - neckW / 2, neckY)
+            cubicTo(cx - neckW, neckY + s * 0.08f, cx - bodyW / 2, neckY + s * 0.2f, cx - bodyW / 2, neckY + s * 0.42f)
+            cubicTo(cx - bodyW / 2, bottom - s * 0.02f, cx - bodyW * 0.3f, bottom, cx, bottom)
+            cubicTo(cx + bodyW * 0.3f, bottom, cx + bodyW / 2, bottom - s * 0.02f, cx + bodyW / 2, neckY + s * 0.42f)
+            cubicTo(cx + bodyW / 2, neckY + s * 0.2f, cx + neckW, neckY + s * 0.08f, cx + neckW / 2, neckY)
+            close()
+        }
+        canvas.drawPath(body, shadow)
+        canvas.drawPath(body, felt)
+        // 首から下へ流れる、絞ったしわ
+        for (i in -2..2) {
+            if (i == 0) continue
+            val x = cx + i * neckW * 0.22f
+            canvas.drawPath(Path().apply {
+                moveTo(x, neckY + dp(2f))
+                quadTo(x + i * dp(4f), neckY + s * 0.12f, x + i * dp(7f), neckY + s * (0.24f - 0.14f * openness))
+            }, gather)
+        }
+        // 縁のステッチ（体の少し内側）
+        canvas.save()
+        canvas.scale(0.82f, 0.84f, cx, neckY + (bottom - neckY) * 0.56f)
+        canvas.drawPath(body, seam)
         canvas.restore()
-        val text = android.text.TextUtils.ellipsize(name, label, width - context.dp(8f), android.text.TextUtils.TruncateAt.END)
-        canvas.drawText(text, 0, text.length, cx, height - context.dp(6f), label)
-        if (packages.any { Badges.count(it) > 0 }) drawKnot(canvas, context, cx + r * 0.75f, cy - r * 0.75f)
+        // 口のフリル（3 つの小さな山）。開くと口の中（暗い所）が見える
+        val fw = neckW * (1.7f + 0.3f * openness)
+        val frillTop = neckY - s * (0.13f + 0.04f * openness)
+        val frill = Path().apply {
+            moveTo(cx - neckW / 2, neckY)
+            lineTo(cx - fw / 2, frillTop + dp(2f))
+            quadTo(cx - fw / 3, frillTop - dp(2f), cx - fw / 6, frillTop + dp(1.5f))
+            quadTo(cx, frillTop - dp(2.5f), cx + fw / 6, frillTop + dp(1.5f))
+            quadTo(cx + fw / 3, frillTop - dp(2f), cx + fw / 2, frillTop + dp(2f))
+            lineTo(cx + neckW / 2, neckY)
+            close()
+        }
+        canvas.drawPath(frill, shadow)
+        canvas.drawPath(frill, felt)
+        if (openness > 0.05f) {
+            val mouthH = (neckY - frillTop) * 0.55f * openness
+            canvas.drawOval(RectF(cx - fw * 0.36f, frillTop + dp(2f), cx + fw * 0.36f, frillTop + dp(2f) + mouthH), inside)
+        }
+        // 紐：首にひと巻きし、片側で蝶結びの輪と、先に小さな玉。開くとゆるんで輪が広がる
+        canvas.drawLine(cx - neckW / 2 - dp(1.5f), neckY, cx + neckW / 2 + dp(1.5f), neckY, cord)
+        val kx = cx + neckW / 2 + dp(1.5f)
+        val loop = s * (0.07f + 0.05f * openness)
+        canvas.drawOval(RectF(kx - dp(1f), neckY - loop, kx + loop * 1.4f, neckY + dp(1f)), cord)
+        canvas.drawPath(Path().apply { moveTo(kx, neckY); quadTo(kx + dp(5f), neckY + s * 0.08f, kx + dp(2f), neckY + s * 0.16f) }, cord)
+        canvas.drawPath(Path().apply { moveTo(kx, neckY); quadTo(kx - dp(2f), neckY + s * 0.09f, kx - dp(4f), neckY + s * 0.13f) }, cord)
+        canvas.drawCircle(kx + dp(2f), neckY + s * 0.16f, dp(2.4f), bead)
+        canvas.drawCircle(kx - dp(4f), neckY + s * 0.13f, dp(2.4f), bead)
+        canvas.restore()
+        val text = android.text.TextUtils.ellipsize(name, label, width - dp(8f), android.text.TextUtils.TruncateAt.END)
+        canvas.drawText(text, 0, text.length, cx, height - dp(6f), label)
+        if (packages.any { Badges.count(it) > 0 }) drawKnot(canvas, context, cx + bodyW * 0.4f, neckY + s * 0.1f)
     }
 }
 
 /**
- * ノブを押したときに、そのすぐ上（入らなければ下）に開く吹き出し。中のアプリを 4 列で並べ、タップで開く。
+ * 巾着を押したときに、そのすぐ上（入らなければ下）に開く吹き出し。中のアプリを 4 列で並べ、タップで開く。
+ * 開くとき、アプリは巾着の口から飛び出して並び、閉じるときは巾着の中へ戻る。
  * 吹き出しの外をタップするか、戻るボタンで閉じる。
  */
 @SuppressLint("ViewConstructor")
@@ -260,6 +451,7 @@ class FolderPopover(
         }
     }
     private var closing = false
+    private var shown = false
 
     init {
         setOnClickListener { dismiss() }
@@ -280,7 +472,7 @@ class FolderPopover(
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
         super.onLayout(changed, left, top, right, bottom)
-        // ノブの上に置く。入らなければ下に置く
+        // 巾着の上に置く。入らなければ下に置く
         val loc = IntArray(2)
         anchor.getLocationInWindow(loc)
         val me = IntArray(2)
@@ -289,20 +481,49 @@ class FolderPopover(
         val bh = bubble.measuredHeight
         val y = if (ay - bh > dpi(24f)) ay - bh else ay + anchor.height
         bubble.layout(dpi(8f), y, width - dpi(8f), y + bh)
+        if (!shown) {
+            shown = true
+            post { flyOut() }
+        }
+    }
+
+    /** 巾着の口の位置（各アプリから見た相対位置）へ、アプリを集める・そこから並べる。 */
+    private fun mouthOffset(child: View): Pair<Float, Float> {
+        val a = IntArray(2); anchor.getLocationInWindow(a)
+        val c = IntArray(2); child.getLocationInWindow(c)
+        val mx = a[0] + anchor.width / 2f
+        val my = a[1] + anchor.height * 0.3f
+        return (mx - (c[0] + child.width / 2f)) to (my - (c[1] + child.height / 2f))
+    }
+
+    private fun flyOut() {
+        (anchor as? FolderPouch)?.animateOpen(true)
+        for (i in 0 until grid.childCount) {
+            val c = grid.getChildAt(i)
+            val (dx, dy) = mouthOffset(c)
+            c.translationX = dx; c.translationY = dy
+            c.scaleX = 0.2f; c.scaleY = 0.2f; c.alpha = 0f
+            c.animate().translationX(0f).translationY(0f).scaleX(1f).scaleY(1f).alpha(1f)
+                .setStartDelay(60L + i * 35L).setDuration(260).setInterpolator(OvershootInterpolator(1.4f)).start()
+        }
     }
 
     fun show(parent: ViewGroup) {
         parent.addView(this, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         bubble.alpha = 0f
-        bubble.scaleX = 0.9f
-        bubble.scaleY = 0.9f
-        bubble.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(160).start()
+        bubble.animate().alpha(1f).setDuration(160).start()
     }
 
     fun dismiss() {
         if (closing) return
         closing = true
-        bubble.animate().alpha(0f).setDuration(120).withEndAction {
+        (anchor as? FolderPouch)?.animateOpen(false)
+        for (i in 0 until grid.childCount) {
+            val c = grid.getChildAt(i)
+            val (dx, dy) = mouthOffset(c)
+            c.animate().translationX(dx).translationY(dy).scaleX(0.2f).scaleY(0.2f).alpha(0f).setStartDelay(0).setDuration(170).start()
+        }
+        bubble.animate().alpha(0f).setStartDelay(90).setDuration(120).withEndAction {
             (parent as? ViewGroup)?.removeView(this)
             onClosed()
         }.start()

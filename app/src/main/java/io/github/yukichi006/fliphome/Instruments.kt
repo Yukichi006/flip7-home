@@ -313,7 +313,7 @@ class ZipperFader(
     private val label: String,
     private val onEnd: (top: Boolean) -> Unit = {},
     private val needPermission: () -> Unit = {},
-) : View(context) {
+) : View(context), SewAware {
     private val audio = context.getSystemService(AudioManager::class.java)
     private val tooth = Paint(Paint.ANTI_ALIAS_FLAG)
     private val tape = context.stitch(0.9f, Thread.DIM)
@@ -445,6 +445,13 @@ class ZipperFader(
 
     override fun onDraw(canvas: Canvas) {
         patch.draw(canvas, width, height)
+        val alpha = Sewing.contentAlpha()
+        val save = if (alpha < 255) canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), alpha) else -1
+        drawZipper(canvas)
+        if (save >= 0) canvas.restoreToCount(save)
+    }
+
+    private fun drawZipper(canvas: Canvas) {
         val cx = width / 2f
         val top = trackTop()
         val bottom = trackBottom()

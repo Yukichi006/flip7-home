@@ -32,7 +32,57 @@ object Cloth {
 
     /** 縫い付けたワッペンの布（少しだけ明るいフェルト）。 */
     const val FELT = 0xFF171718.toInt()
+
+    /** パッドの裏地（めくると見える、少し明るく温かい灰色）。 */
+    const val LINING = 0xFF2E2C29.toInt()
+
+    /** めくれた布の裏側（表より少しだけ明るい、毛羽立った面）。 */
+    const val BACK = 0xFF222120.toInt()
 }
+
+/**
+ * ページを移ったときの「縫い上がる」演出。[progress] が 0 から 1 まで進む間に、
+ * ワッペンの縁のステッチがミシンで縫われるように端から現れ、中身はふわっと浮かび上がる。
+ */
+object Sewing {
+    var progress = 1f
+        private set
+    private var animator: android.animation.ValueAnimator? = null
+
+    /** 中身（アイコンや文字）の濃さ（0〜255）。縫い目が半分ほど縫えてから浮かび上がる。 */
+    fun contentAlpha(): Int = (((progress - 0.35f) / 0.65f).coerceIn(0f, 1f) * 255).toInt()
+
+    /** [views] を縫い上げる。ミシンのように、短い振動を 3 回入れる。 */
+    fun start(views: List<android.view.View>, haptic: android.view.View?) {
+        animator?.cancel()
+        animator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 520
+            interpolator = android.view.animation.DecelerateInterpolator(1.3f)
+            var ticks = 0
+            addUpdateListener { a ->
+                progress = a.animatedValue as Float
+                for (v in views) {
+                    if (v is SewAware) v.invalidate() else v.alpha = contentAlpha() / 255f
+                }
+                val t = (a.animatedFraction * 4).toInt()
+                if (t > ticks && t <= 3) {
+                    ticks = t
+                    haptic?.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                }
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    progress = 1f
+                    views.forEach { if (it is SewAware) it.invalidate() else it.alpha = 1f }
+                }
+            })
+            start()
+        }
+    }
+}
+
+/** 縫い上がりの演出に合わせて、自分で描き方を変える部品（それ以外の部品は、まとめて薄い状態から浮かび上がらせる）。 */
+interface SewAware
 
 fun Context.dp(v: Float): Float = v * resources.displayMetrics.density
 fun Context.dpi(v: Float): Int = dp(v).roundToInt()

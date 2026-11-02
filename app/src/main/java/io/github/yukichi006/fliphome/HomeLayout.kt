@@ -21,7 +21,7 @@ import kotlin.math.roundToInt
  */
 enum class ModuleType(val label: String, val note: String, val w: Int, val h: Int, val resizable: Boolean, val addable: Boolean = true) {
     APP("アプリ", "", 1, 1, false, addable = false),
-    FOLDER("ノブ", "複数のアプリをまとめるフォルダ", 1, 1, false),
+    FOLDER("巾着", "複数のアプリをまとめるフォルダ", 1, 1, false),
     CLOCK("時計と日付", "大きな時計と日付", 5, 2, true),
     AGENDA("今日の予定", "今日これからの予定", 3, 2, true),
     BATTERY("電池", "本体と Bluetooth 機器の残量", 2, 2, true),

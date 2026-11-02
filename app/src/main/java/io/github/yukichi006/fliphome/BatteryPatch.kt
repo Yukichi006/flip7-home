@@ -17,8 +17,8 @@ import android.os.BatteryManager
 import android.text.TextUtils
 
 /**
- * 本体と、接続中の Bluetooth 機器の電池残量を、× のクロスステッチ 10 個で表すワッペン。
- * 残量の分だけ白い糸で縫い、残りは薄い糸で縫う。
+ * 本体と、接続中の Bluetooth 機器の電池残量を、大きな数字（%）と、サテン刺繍のように糸で埋めた棒で表すワッペン。
+ * 20% 以下なら「残りわずか」、充電中なら「充電中」と添える。
  *
  * 残量の読み方は FlipCover と同じ：機器が Android に報告している値を使い、
  * 報告しない Bluetooth LE 機器（Galaxy Fit など）は [BleBattery] で直接問い合わせる。
@@ -35,14 +35,20 @@ class BatteryPatch(context: Context) : PatchView(context) {
 
     private val title = context.threadText(10.5f, color = Thread.DIM).apply { letterSpacing = 0.2f }
     private val name = context.threadText(11.5f)
-    private val percent = context.threadText(11.5f).apply {
+    private val big = context.threadText(22f, bold = true).apply {
         textAlign = Paint.Align.RIGHT
         fontFeatureSettings = "tnum"
     }
-    private val cross = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        setShadowLayer(context.dp(0.5f), 0f, context.dp(0.9f), Thread.SHADOW)
+    private val unit = context.threadText(10f, bold = true).apply { textAlign = Paint.Align.RIGHT }
+    private val small = context.threadText(9.5f, color = Thread.DIM)
+    private val trackStitch = context.stitch(0.9f, Thread.DIM)
+    private val satin = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Thread.COLOR
+        setShadowLayer(context.dp(0.6f), 0f, context.dp(1f), Thread.SHADOW)
+    }
+    private val satinLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x30000000
+        strokeWidth = context.dp(0.8f)
     }
 
     private val receiver = object : BroadcastReceiver() {
@@ -146,36 +152,62 @@ class BatteryPatch(context: Context) : PatchView(context) {
         var y = area.top + title.textSize
         canvas.drawText("BATTERY", area.left, y, title)
         val shown = rows.ifEmpty { return }
-        // 残りの高さを行の数で分ける
-        val rowH = ((area.bottom - y - context.dp(4f)) / MAX_ROWS.coerceAtLeast(shown.size)).coerceAtMost(context.dp(40f))
-        // × の大きさは糸らしく小ぶりにし、幅が余れば間隔で埋める
-        val crossS = ((area.width() - context.dp(3f) * (SEGMENTS - 1)) / SEGMENTS).coerceAtMost(minOf(rowH * 0.3f, context.dp(8f)))
-        val crossGap = ((area.width() - crossS * SEGMENTS) / (SEGMENTS - 1)).coerceAtMost(crossS * 0.9f)
-        cross.strokeWidth = (crossS * 0.24f).coerceAtLeast(context.dp(1.1f))
+        // 残りの高さを行の数で分ける。行ごとに「名前と大きな %」と「残量の棒」
+        val rowH = ((area.bottom - y) / shown.size.coerceAtLeast(1)).coerceAtMost(context.dp(64f))
+        val barH = (rowH * 0.2f).coerceIn(context.dp(6f), context.dp(11f))
         for (row in shown) {
-            y += context.dp(6f) + name.textSize
-            val pct = "${row.level}%"
-            val pctW = percent.measureText("100%") + context.dp(4f)
-            val label = if (row.charging) "${row.name}・充電中" else row.name
-            val t = TextUtils.ellipsize(label, name, area.width() - pctW, TextUtils.TruncateAt.END)
-            canvas.drawText(t, 0, t.length, area.left, y, name)
-            canvas.drawText(pct, area.right, y, percent)
-            val top = y + context.dp(5f)
-            val lit = ((row.level + 5) / 10).coerceAtLeast(if (row.level > 0) 1 else 0)
-            for (k in 0 until SEGMENTS) {
-                val x = area.left + k * (crossS + crossGap)
-                cross.color = if (k < lit) Thread.COLOR else Thread.FAINT
-                canvas.drawLine(x, top, x + crossS, top + crossS, cross)
-                canvas.drawLine(x + crossS, top, x, top + crossS, cross)
+            val top = y + context.dp(4f)
+            // 大きな % （行の高さと幅に合わせる）
+            big.textSize = (rowH - barH - context.dp(12f)).coerceIn(context.sp(12f), context.sp(26f))
+            val num = "${row.level}"
+            unit.textSize = big.textSize * 0.45f
+            val numW = big.measureText(num)
+            val unitW = unit.measureText("%")
+            val maxNumW = area.width() * 0.62f
+            if (numW + unitW > maxNumW) big.textSize *= maxNumW / (numW + unitW)
+            val baseline = top + big.textSize * 0.92f
+            canvas.drawText("%", area.right, baseline, unit)
+            canvas.drawText(num, area.right - unit.measureText("%") - context.dp(1f), baseline, big)
+            // 名前（低いとき・充電中はひとこと添える）
+            val note = when {
+                row.charging -> "充電中"
+                row.level <= LOW -> "残りわずか"
+                else -> null
             }
-            y = top + crossS
+            val nameW = area.width() - big.measureText(num) - unit.measureText("%") - context.dp(8f)
+            val t = TextUtils.ellipsize(row.name, name, nameW, TextUtils.TruncateAt.END)
+            canvas.drawText(t, 0, t.length, area.left, top + name.textSize, name)
+            if (note != null) {
+                val n = TextUtils.ellipsize(note, small, nameW, TextUtils.TruncateAt.END)
+                canvas.drawText(n, 0, n.length, area.left, top + name.textSize + small.textSize * 1.35f, small)
+            }
+            // 残量の棒：外枠は細いステッチ、残っている分はサテン刺繍のように糸で埋める
+            val barTop = baseline + context.dp(6f)
+            val track = RectF(area.left, barTop, area.right, barTop + barH)
+            canvas.drawRoundRect(track, barH / 2, barH / 2, trackStitch)
+            val fillW = (track.width() * row.level / 100f).coerceAtLeast(if (row.level > 0) barH else 0f)
+            if (fillW > 0f) {
+                val fill = RectF(track.left, track.top, track.left + fillW, track.bottom)
+                canvas.drawRoundRect(fill, barH / 2, barH / 2, satin)
+                // 斜めの糸目
+                canvas.save()
+                canvas.clipRect(fill)
+                var x = fill.left - barH
+                while (x < fill.right) {
+                    canvas.drawLine(x, fill.bottom, x + barH, fill.top, satinLine)
+                    x += context.dp(3f)
+                }
+                canvas.restore()
+            }
+            y = track.bottom + context.dp(4f)
         }
     }
 
     companion object {
         const val REQUEST = 12
         private const val MAX_ROWS = 3
-        private const val SEGMENTS = 10
+        /** これ以下なら「残りわずか」と添える（%）。 */
+        private const val LOW = 20
         private const val POLL_MS = 60_000L
         private const val ACTION_BT_BATTERY = "android.bluetooth.device.action.BATTERY_LEVEL_CHANGED"
         private const val EXTRA_BT_BATTERY = "android.bluetooth.device.extra.BATTERY_LEVEL"
