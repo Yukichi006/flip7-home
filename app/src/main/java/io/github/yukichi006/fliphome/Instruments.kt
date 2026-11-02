@@ -153,14 +153,42 @@ class DateView(context: Context, private val align: Align, private val style: St
     }
 }
 
-/** 見出し（ページの名前など）。文字の下に、細かい縫い目の線を引く。 */
+/**
+ * 見出し（ページの名前など）。横長なら文字の下に縫い目の線を、縦長なら文字を縦に回し、横に短い縫い目を梯子のように並べる。
+ */
 @SuppressLint("ViewConstructor")
 class TitleView(context: Context, private val title: String, private val align: Align) : View(context) {
     private val text = context.threadText(22f, bold = true).apply { letterSpacing = 0.12f }
     private val seam = context.stitch(1.0f, Thread.DIM)
+    private val bar = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Thread.COLOR
+        strokeWidth = context.dp(3.2f)
+        strokeCap = Paint.Cap.ROUND
+        setShadowLayer(context.dp(0.6f), 0f, context.dp(1f), Thread.SHADOW)
+    }
 
     override fun onDraw(canvas: Canvas) {
         val pad = context.dp(8f)
+        if (height > width * 1.4f) {
+            // 縦長：左に文字を縦に、右に梯子のような縫い目
+            text.textSize = min(context.sp(20f), width * 0.36f)
+            text.color = Thread.DIM
+            val t = TextUtils.ellipsize(title, text, height - pad * 2, TextUtils.TruncateAt.END).toString()
+            canvas.save()
+            canvas.rotate(90f)
+            canvas.drawText(t, pad, -pad, text)
+            canvas.restore()
+            val x0 = pad + text.textSize + context.dp(6f)
+            val x1 = width - pad
+            val step = context.dp(10f)
+            var y = pad + context.dp(4f)
+            while (y < height - pad) {
+                canvas.drawLine(x0, y, x1, y, bar)
+                y += step
+            }
+            return
+        }
+        text.color = Thread.COLOR
         text.textSize = min(context.sp(26f), height * 0.45f)
         val t = TextUtils.ellipsize(title, text, width - pad * 2, TextUtils.TruncateAt.END).toString()
         val cw = text.measureText(t)

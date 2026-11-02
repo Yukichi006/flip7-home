@@ -69,7 +69,7 @@ enum class Genre(val label: String, val path: String) {
             VIDEO to listOf("youtube", "video", "netflix", "=avod", "tver", "abema", "hulu", "disney", "=tv", "twitch", "niconico", "動画"),
             MUSIC to listOf("music", "spotify", "=audio", "radio", "podcast", "sound", "=fm", "音楽"),
             MAP to listOf("=maps", "=map", "waze", "地図", "マップ"),
-            TRAIN to listOf("=jr", "train", "transit", "norikae", "jorudan", "navitime", "=bus", "taxi", "uber", "=go", "乗換", "=access", "=ekinet", "=eki"),
+            TRAIN to listOf("=jr", "train", "transit", "norikae", "jorudan", "navitime", "=bus", "taxi", "uber", "=go", "乗換", "=access", "=ekinet", "=eki", "jreast", "jr東日本", "jr_central", "exreserve", "taxibell", "=ex"),
             PLANE to listOf("=ana", "=jal", "airline", "flight", "travel", "booking", "airbnb", "=trip", "skyscanner", "jalan", "rakutentravel"),
             WALLET to listOf("paypay", "wallet", "suica", "=pay", "=pasmo", "=ic", "=quicpay", "=edy", "=waon", "=nanaco", "=id"),
             BANK to listOf("bank", "mufg", "smbc", "mizuho", "=card", "銀行", "証券", "sbi"),

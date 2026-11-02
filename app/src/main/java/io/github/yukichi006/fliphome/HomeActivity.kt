@@ -410,6 +410,13 @@ class HomeActivity : Activity() {
             showBadgeSheet()
             true
         }
+        menu.add("MPC の配置を読み込む…").setOnMenuItemClickListener {
+            val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream"))
+            @Suppress("DEPRECATION")
+            runCatching { startActivityForResult(pick, REQUEST_IMPORT) }
+            true
+        }
         menu.add("アプリ一覧を開く").setOnMenuItemClickListener { exitEdit(); openDrawer(); true }
         menu.add("ホームアプリを切り替える").setOnMenuItemClickListener {
             runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
@@ -735,8 +742,46 @@ class HomeActivity : Activity() {
         }
     }
 
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_IMPORT || resultCode != RESULT_OK || !ready) return
+        val uri = data?.data ?: return
+        val text = runCatching {
+            contentResolver.openInputStream(uri)?.use { input ->
+                // 配置ファイルは数百 KB 程度。大きすぎるファイルは読まない
+                val bytes = input.readBytes()
+                require(bytes.size < 4 * 1024 * 1024) { "ファイルが大きすぎます" }
+                String(bytes, Charsets.UTF_8)
+            }
+        }.getOrNull() ?: return toast("ファイルを読めませんでした")
+        val result = runCatching { MpcImport.read(text, repo) { store.newId() } }
+            .getOrElse { return toast("MPC の配置として読めませんでした（${it.message}）") }
+        val pages = result.home.pages.size
+        val note = buildString {
+            append("${pages} ページ、${result.placed} 個の部品を読み込み、今の配置と置き換えます。")
+            append("（${result.home.cols} 列 × ${result.home.rows} 行、下段のポケットは隠します）")
+            if (result.skipped.isNotEmpty()) append("\n\n見つからず飛ばすもの：${result.skipped.take(12).joinToString("、")}")
+            append("\n\n天気は、天気の部品ができてから読み込めます。")
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("MPC の配置を読み込む")
+            .setMessage(note)
+            .setPositiveButton("置き換える") { _, _ ->
+                store.home = result.home.copy(dock = store.home.dock)
+                result.names.forEach { (k, v) -> store.setName(k, v) }
+                page = 0
+                rebuildHome()
+                toast("MPC の配置を読み込みました")
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
     companion object {
         private const val REQUEST_HOME = 21
+        private const val REQUEST_IMPORT = 31
     }
 
     // ------------------------------------------------------------------
