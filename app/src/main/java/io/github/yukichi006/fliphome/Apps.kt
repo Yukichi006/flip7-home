@@ -77,6 +77,9 @@ class AppRepository(private val context: Context) {
     private val store = LayoutStore(context)
     private val guessed = mutableMapOf<String, Genre>()
 
+    /** 画面に出すアプリ名。自分で付け替えていればそれ、なければアプリ本来の名前。 */
+    fun label(app: AppEntry): String = store.nameOf(app.key) ?: app.label
+
     /** アプリのアイコンにするジャンル。自分で選び直していればそれ、なければ推し量ったもの。 */
     fun genre(app: AppEntry): Genre =
         store.genreOf(app.key) ?: guessed.getOrPut(app.key) { Genre.guess(context, app) }

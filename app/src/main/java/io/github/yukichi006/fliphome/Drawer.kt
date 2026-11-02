@@ -136,7 +136,7 @@ class DrawerView(
                 }
             }
         } else {
-            repo.apps.filter { Index.normalize(it.label).contains(query) }.map { Item(it) }
+            repo.apps.filter { Index.normalize(repo.label(it)).contains(query) || Index.normalize(it.label).contains(query) }.map { Item(it) }
         }
         rail.setPresent(repo.apps.map { it.group }.toSet())
         rail.visibility = if (query.isEmpty()) View.VISIBLE else View.INVISIBLE

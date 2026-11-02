@@ -159,7 +159,7 @@ fun actionList(context: Context, items: List<Pair<String, () -> Unit>>, note: St
 fun modulePicker(context: Context, onPick: (ModuleType) -> Unit): View =
     actionList(
         context,
-        ModuleType.entries.filter { it != ModuleType.APP }.map { t -> "${t.label}（${t.note}）" to { onPick(t) } },
+        ModuleType.entries.filter { it.addable }.map { t -> "${t.label}（${t.note}）" to { onPick(t) } },
         note = "置いたあとは、ドラッグで移動、右下のつまみで大きさを変えられます。",
     )
 
@@ -207,7 +207,7 @@ class AppPicker(context: Context, private val repo: AppRepository, private val o
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
                 val q = Index.normalize(s.toString().trim())
-                shown = if (q.isEmpty()) repo.apps else repo.apps.filter { Index.normalize(it.label).contains(q) }
+                shown = if (q.isEmpty()) repo.apps else repo.apps.filter { Index.normalize(repo.label(it)).contains(q) || Index.normalize(it.label).contains(q) }
                 adapter.notifyDataSetChanged()
             }
         })
@@ -233,7 +233,7 @@ class AppRowView(context: Context, private val repo: AppRepository) : View(conte
         val a = app ?: return
         canvas.drawBitmap(GenreIcons.bitmap(repo.genre(a), iconPx), context.dp(4f), (height - iconPx) / 2f, null)
         val x = iconPx + context.dp(18f)
-        val t = TextUtils.ellipsize(a.label, label, width - x, TextUtils.TruncateAt.END)
+        val t = TextUtils.ellipsize(repo.label(a), label, width - x, TextUtils.TruncateAt.END)
         canvas.drawText(t, 0, t.length, x, height / 2f + label.textSize * 0.35f, label)
     }
 }
@@ -272,5 +272,102 @@ fun genrePicker(context: Context, current: Genre?, onPick: (Genre?) -> Unit): Vi
             }
         }
         setOnItemClickListener { _, _, pos, _ -> onPick(items[pos]) }
+    }
+}
+
+/** 名前を入力する欄と「保存」「元に戻す」。[original] は付け替える前の名前（元に戻すと null を渡す）。 */
+fun renameBody(context: Context, current: String, original: String?, onSave: (String?) -> Unit): View {
+    val column = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, context.dpi(10f), 0, 0)
+    }
+    val edit = EditText(context).apply {
+        background = null
+        setTextColor(Thread.COLOR)
+        setHintTextColor(Thread.DIM)
+        textSize = 17f
+        isSingleLine = true
+        setText(current)
+        setSelection(current.length)
+        imeOptions = EditorInfo.IME_ACTION_DONE
+        setPadding(context.dpi(8f), 0, context.dpi(8f), 0)
+    }
+    column.addView(PatchLayout(context, PatchPainter.Shape.Round(40f)).apply {
+        addView(edit, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(64f)))
+    column.addView(Pill(context, "保存", selected = true).apply { setOnClickListener { onSave(edit.text.toString()) } },
+        LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(54f)).apply { topMargin = context.dpi(10f) })
+    if (original != null) {
+        column.addView(Pill(context, "元の名前（$original）に戻す").apply { setOnClickListener { onSave(null) } },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(54f)))
+    }
+    edit.setOnEditorActionListener { _, _, _ -> onSave(edit.text.toString()); true }
+    edit.requestFocus()
+    edit.post { context.getSystemService(InputMethodManager::class.java)?.showSoftInput(edit, 0) }
+    return column
+}
+
+/**
+ * アプリを何個でも選べる一覧（フォルダの中身を選ぶ）。選んだものには糸の印（✓）を付ける。
+ * 下の「決定」で、選んだ順に [onDone] に渡す。
+ */
+@SuppressLint("ViewConstructor")
+class AppMultiPicker(
+    context: Context,
+    private val repo: AppRepository,
+    initial: List<String>,
+    private val onDone: (List<String>) -> Unit,
+) : LinearLayout(context) {
+    private val picked = initial.toMutableList()
+    private val apps = repo.apps
+    private val adapter = object : BaseAdapter() {
+        override fun getCount() = apps.size
+        override fun getItem(position: Int) = apps[position]
+        override fun getItemId(position: Int) = position.toLong()
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
+            ((convertView as? CheckRow) ?: CheckRow(context)).also { it.bind(apps[position], apps[position].key in picked) }
+    }
+
+    private inner class CheckRow(context: Context) : FrameLayout(context) {
+        private val row = AppRowView(context, repo)
+        private var checked = false
+        private val mark = context.stitch(1.6f)
+        private val box = context.stitch(1.0f, Thread.DIM)
+        init {
+            setWillNotDraw(false)
+            addView(row)
+            layoutParams = AbsListView.LayoutParams(AbsListView.LayoutParams.MATCH_PARENT, context.dpi(56f))
+        }
+        fun bind(app: AppEntry, on: Boolean) { row.bind(app); checked = on; invalidate() }
+        override fun dispatchDraw(canvas: Canvas) {
+            super.dispatchDraw(canvas)
+            val s = dp(22f)
+            val r = RectF(width - s - dp(10f), (height - s) / 2f, width - dp(10f), (height + s) / 2f)
+            canvas.drawRoundRect(r, dp(6f), dp(6f), box)
+            if (checked) {
+                val p = android.graphics.Path().apply {
+                    moveTo(r.left + s * 0.2f, r.centerY()); lineTo(r.left + s * 0.42f, r.bottom - s * 0.2f); lineTo(r.right - s * 0.15f, r.top + s * 0.15f)
+                }
+                canvas.drawPath(p, mark)
+            }
+        }
+    }
+
+    init {
+        orientation = VERTICAL
+        addView(ListView(context).apply {
+            divider = null
+            selector = android.graphics.drawable.ColorDrawable(0)
+            cacheColorHint = 0
+            isVerticalScrollBarEnabled = false
+            adapter = this@AppMultiPicker.adapter
+            setOnItemClickListener { _, _, pos, _ ->
+                val key = apps[pos].key
+                if (key in picked) picked.remove(key) else picked.add(key)
+                this@AppMultiPicker.adapter.notifyDataSetChanged()
+            }
+        }, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
+        addView(Pill(context, "決定", selected = true).apply { setOnClickListener { onDone(picked.toList()) } },
+            LayoutParams(LayoutParams.MATCH_PARENT, dpi(56f)))
     }
 }
