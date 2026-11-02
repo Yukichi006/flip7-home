@@ -147,6 +147,8 @@ class HomeActivity : Activity() {
         if (!ready) return
         banner.visibility = if (isDefaultHome()) View.GONE else View.VISIBLE
         refreshModules()
+        // ロック画面の壁紙（ステッチ）を使っていれば、日付が変わったときに描き直す
+        LockArt.refreshIfNeeded(this)
     }
 
     override fun onStop() {
@@ -439,6 +441,18 @@ class HomeActivity : Activity() {
         }
         menu.add(if (Badges.enabled(this@HomeActivity)) "通知の印：使っています（設定）" else "通知の印を使う…").setOnMenuItemClickListener {
             showBadgeSheet()
+            true
+        }
+        menu.add(if (LockArt.enabled(this@HomeActivity)) "ロック画面のステッチをやめる" else "ロック画面もステッチにする").setOnMenuItemClickListener {
+            if (LockArt.enabled(this@HomeActivity)) {
+                LockArt.disable(this@HomeActivity)
+                toast("ロック画面の壁紙を元に戻しました")
+            } else {
+                toast("ロック画面の壁紙を描いています…")
+                LockArt.enable(this@HomeActivity) { ok ->
+                    toast(if (ok) "ロック画面をステッチにしました（毎日描き直します）" else "ロック画面の壁紙を設定できませんでした")
+                }
+            }
             true
         }
         menu.add("MPC の配置を読み込む…").setOnMenuItemClickListener {

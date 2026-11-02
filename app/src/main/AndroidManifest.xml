@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- 明るさのフェーダーで、画面の明るさを変える（「システム設定の変更」で許可したときだけ） -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <!-- ロック画面の壁紙を、ステッチの絵にする（設定でオンにしたときだけ） -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <!-- 下へスワイプで通知を開く -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
 
