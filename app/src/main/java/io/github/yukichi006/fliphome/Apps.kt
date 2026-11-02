@@ -1,4 +1,4 @@
-package com.example.fliphome
+package io.github.yukichi006.fliphome
 
 import android.app.ActivityOptions
 import android.content.ComponentName
@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
 import android.graphics.Rect
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.UserHandle
@@ -151,12 +150,5 @@ class AppRepository(private val context: Context) {
 
     fun openDetails(app: AppEntry) {
         runCatching { launcherApps.startAppDetailsActivity(app.component, app.user, null, null) }
-    }
-
-    fun uninstall(app: AppEntry) {
-        val intent = Intent(Intent.ACTION_DELETE, Uri.fromParts("package", app.component.packageName, null))
-            .putExtra(Intent.EXTRA_USER, app.user)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        runCatching { context.startActivity(intent) }
     }
 }

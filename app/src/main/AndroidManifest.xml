@@ -7,8 +7,6 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- 下へスワイプで通知を開く -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
-    <!-- 長押しメニューからアプリをアンインストールする -->
-    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
     <queries>
         <!-- ホーム画面とアプリ一覧に、インストール済みのアプリを並べる -->

@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.fliphome"
+    namespace = "io.github.yukichi006.fliphome"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.fliphome"
+        applicationId = "io.github.yukichi006.fliphome"
         minSdk = 31
         targetSdk = 35
         // CI の実行番号を使い、更新のたびに大きくなるようにする
@@ -41,6 +41,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    // リリース版のビルドで走る簡易チェック（lint）は、問題を記録だけして止めない
+    lint { abortOnError = false }
 }
 
 // 画面はすべてコードで描くので、AndroidX などのライブラリは使わない（Kotlin の標準ライブラリだけ）

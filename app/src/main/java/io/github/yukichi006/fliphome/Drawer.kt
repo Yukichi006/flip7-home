@@ -1,4 +1,4 @@
-package com.example.fliphome
+package io.github.yukichi006.fliphome
 
 import android.annotation.SuppressLint
 import android.content.Context

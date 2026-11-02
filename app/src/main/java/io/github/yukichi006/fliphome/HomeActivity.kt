@@ -1,4 +1,4 @@
-package com.example.fliphome
+package io.github.yukichi006.fliphome
 
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -259,8 +259,8 @@ class HomeActivity : Activity() {
     }
 
     private fun PopupMenu.appItems(app: AppEntry) {
-        menu.add("アプリ情報").setOnMenuItemClickListener { repo.openDetails(app); true }
-        menu.add("アンインストール").setOnMenuItemClickListener { repo.uninstall(app); true }
+        // アンインストールは、アプリ情報の画面のボタンから行う（ほかのアプリを消す権限は持たない）
+        menu.add("アプリ情報・アンインストール").setOnMenuItemClickListener { repo.openDetails(app); true }
     }
 
     /** 何もない所を長押ししたとき。 */
