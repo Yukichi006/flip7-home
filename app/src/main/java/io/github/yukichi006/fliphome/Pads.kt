@@ -18,6 +18,43 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.min
 
+/**
+ * 通知の件数を刺繍した布タグ（生成りの布に黒い糸の数字、10 件以上は「9+」）を描く。
+ * ([x], [y]) は、タグを吊るす糸の付け根。[swing] だけ傾けてぶら下げる。
+ */
+fun drawCountTag(canvas: Canvas, context: Context, x: Float, y: Float, count: Int, swing: Float = 0f) {
+    val text = if (count > 9) "9+" else "$count"
+    val num = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Cloth.BASE
+        textSize = context.sp(10f)
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        textAlign = Paint.Align.CENTER
+        fontFeatureSettings = "tnum"
+    }
+    val w = (num.measureText(text) + context.dp(9f)).coerceAtLeast(context.dp(17f))
+    val h = context.dp(15f)
+    val body = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Thread.COLOR
+        setShadowLayer(context.dp(2.5f), 0f, context.dp(1.5f), 0xC0000000.toInt())
+    }
+    val edge = stitchPaint(context.dp(0.8f), context.dp(2f), context.dp(1.6f), 0x66000000)
+    val loop = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Thread.COLOR
+        strokeWidth = context.dp(1.1f)
+    }
+    canvas.save()
+    canvas.translate(x, y)
+    canvas.rotate(-14f + swing)
+    // 吊るす糸の輪と、タグの本体
+    canvas.drawLine(0f, 0f, -context.dp(2f), context.dp(4f), loop)
+    val r = RectF(-w / 2 - context.dp(2f), context.dp(4f), w / 2 - context.dp(2f), context.dp(4f) + h)
+    canvas.drawRoundRect(r, context.dp(3.5f), context.dp(3.5f), body)
+    canvas.drawRoundRect(RectF(r).apply { inset(context.dp(2f), context.dp(2f)) }, context.dp(2.5f), context.dp(2.5f), edge)
+    canvas.drawText(text, r.centerX(), r.centerY() + num.textSize * 0.36f, num)
+    canvas.restore()
+}
+
 /** 通知が来ていることを表す「糸の玉」（フレンチノット）を描く。 */
 fun drawKnot(canvas: Canvas, context: Context, cx: Float, cy: Float) {
     val r = context.dp(4.2f)
@@ -109,7 +146,23 @@ class PadView(
     private var finger: Pair<Float, Float>? = null
     private var settle: android.animation.ValueAnimator? = null
 
-    private val badgeListener: () -> Unit = { invalidate() }
+    /** 通知の件数（増えたらタグを揺らす）と、タグの揺れの角度。 */
+    private var lastCount = Badges.count(app.component.packageName)
+    private var swing = 0f
+    private val badgeListener: () -> Unit = {
+        val now = Badges.count(app.component.packageName)
+        if (now > lastCount) swingTag()
+        lastCount = now
+        invalidate()
+    }
+
+    private fun swingTag() {
+        android.animation.ValueAnimator.ofFloat(0f, 22f, -14f, 8f, -4f, 0f).apply {
+            duration = 900
+            addUpdateListener { swing = it.animatedValue as Float; invalidate() }
+            start()
+        }
+    }
 
     init {
         setOnClickListener { repo.launch(app, this) }
@@ -240,6 +293,7 @@ class PadView(
 
     override fun onDraw(canvas: Canvas) {
         val alpha = Sewing.contentAlpha()
+        patch.zigzag = Badges.count(app.component.packageName) > 0
         if (!canPeel()) {
             if (framed) patch.draw(canvas, width, height)
             withAlpha(canvas, alpha) { drawFace(canvas, app, withBadge = true) }
@@ -331,9 +385,11 @@ class PadView(
         canvas.drawBitmap(GenreIcons.bitmap(repo.genre(shown), iconPx), (width - iconPx) / 2f, top, null)
         val text = android.text.TextUtils.ellipsize(repo.label(shown), label, width - inner * 2, android.text.TextUtils.TruncateAt.END)
         canvas.drawText(text, 0, text.length, width / 2f, top + iconPx + dp(3f) + label.textSize, label)
-        if (withBadge && Badges.count(shown.component.packageName) > 0) {
-            val m = if (framed) patch.margin + dp(9f) else dp(8f)
-            drawKnot(canvas, context, width - m, m)
+        val count = Badges.count(shown.component.packageName)
+        if (withBadge && count > 0) {
+            // 右上の角に、件数を刺繍したタグを吊るす
+            val m = if (framed) patch.margin + dp(10f) else dp(12f)
+            drawCountTag(canvas, context, width - m, if (framed) patch.margin + dp(2f) else dp(2f), count, swing)
         }
     }
 }
@@ -469,7 +525,9 @@ class FolderPouch(
         canvas.restore()
         val text = android.text.TextUtils.ellipsize(name, label, width - dp(8f), android.text.TextUtils.TruncateAt.END)
         canvas.drawText(text, 0, text.length, cx, height - dp(6f), label)
-        if (packages.any { Badges.count(it) > 0 }) drawKnot(canvas, context, cx + bodyW * 0.4f, neckY + s * 0.1f)
+        // 中のアプリの通知の件数を合わせて、紐の先にタグで吊るす
+        val total = packages.sumOf { Badges.count(it) }
+        if (total > 0) drawCountTag(canvas, context, cx - neckW / 2 - dp(2f), neckY + dp(1f), total, sway)
     }
 }
 

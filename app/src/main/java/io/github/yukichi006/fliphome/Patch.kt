@@ -50,6 +50,48 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
     private val measure = android.graphics.PathMeasure()
     private val partial = Path()
 
+    /** 縁をジグザグ縫いにするか（通知の印）。 */
+    var zigzag = false
+
+    private val zigPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = context.dp(0.95f) * StitchStyle.scale
+        strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
+        color = Thread.COLOR
+        setShadowLayer(strokeWidth * 0.5f, 0f, strokeWidth * 0.7f, Thread.SHADOW)
+    }
+    private var zigCache: Path? = null
+    private var zigKey = 0f
+
+    /** 輪郭に沿って、左右に振れるジグザグの縫い目を作る（大きさが変わらない限り作り直さない）。 */
+    private fun zigzagOf(src: Path): Path {
+        val key = rect.width() * 10000 + rect.height()
+        zigCache?.let { if (zigKey == key) return it }
+        val m = android.graphics.PathMeasure(src, true)
+        // 本物のジグザグ縫いのように、細かく密に振る
+        val step = context.dp(1.9f)
+        val amp = context.dp(1.5f) * (0.6f + 0.4f * StitchStyle.scale)
+        val pos = FloatArray(2)
+        val tan = FloatArray(2)
+        val out = Path()
+        var d = 0f
+        var i = 0
+        while (d <= m.length) {
+            m.getPosTan(d, pos, tan)
+            val o = if (i % 2 == 0) amp else -amp
+            val x = pos[0] - tan[1] * o
+            val y = pos[1] + tan[0] * o
+            if (i == 0) out.moveTo(x, y) else out.lineTo(x, y)
+            d += step
+            i++
+        }
+        out.close()
+        zigCache = out
+        zigKey = key
+        return out
+    }
+
     fun draw(canvas: Canvas, w: Int, h: Int) {
         rect.set(margin, margin, w - margin, h - margin)
         if (rect.width() <= 0 || rect.height() <= 0) return
@@ -66,13 +108,16 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
         when (shape) {
             is Shape.Round -> {
                 outline(path, rect)
+                // 通知があるときは、縁をジグザグ縫いにして目立たせる
+                val line = if (zigzag) zigzagOf(path) else path
+                val paint = if (zigzag) zigPaint else stitch
                 if (p >= 1f) {
-                    canvas.drawPath(path, stitch)
+                    canvas.drawPath(line, paint)
                 } else {
-                    measure.setPath(path, true)
+                    measure.setPath(line, true)
                     partial.reset()
                     measure.getSegment(0f, measure.length * p, partial, true)
-                    canvas.drawPath(partial, stitch)
+                    canvas.drawPath(partial, paint)
                 }
             }
             Shape.Pocket -> {
