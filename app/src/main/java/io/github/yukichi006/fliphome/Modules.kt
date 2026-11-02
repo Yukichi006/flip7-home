@@ -111,7 +111,8 @@ class ClockView(context: Context) : View(context) {
         digits.getTextPath(time, 0, time.length, width / 2f, baseline, path)
         canvas.drawPath(path, stitch)
 
-        val dateText = DateFormat.format("M月d日（E）", now).toString()
+        // 端末の言語に関係なく、曜日は日本語（月・火…）で出す
+        val dateText = java.text.SimpleDateFormat("M月d日（E）", Locale.JAPAN).format(now.time)
         canvas.drawText(dateText, width / 2f, dateY, date)
 
         val side = context.dp(14f)

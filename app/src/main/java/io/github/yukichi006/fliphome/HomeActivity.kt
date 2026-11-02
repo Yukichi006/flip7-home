@@ -43,9 +43,15 @@ class HomeActivity : Activity() {
     private lateinit var banner: View
     private lateinit var anchor: View
 
+    /** ホーム画面を組み立て終えたか（不具合の記録を見せているときは false）。 */
+    private var ready = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupWindow()
+        // 前回落ちた・固まった記録があれば、まずそれを見せる（ホーム画面は組み立てない）
+        if (Diagnostics.showIfAny(this) { recreate() }) return
+        ready = true
 
         store = LayoutStore(this)
         repo = AppRepository(this)
@@ -103,8 +109,9 @@ class HomeActivity : Activity() {
         @Suppress("DEPRECATION")
         window.navigationBarColor = Color.TRANSPARENT
         window.isNavigationBarContrastEnforced = false
-        // 暗い布の上なので、ステータスバーの文字は白にする
-        window.insetsController?.setSystemBarsAppearance(
+        // 暗い布の上なので、ステータスバーの文字は白にする。
+        // window.insetsController は画面の土台（decorView）ができる前に呼ぶと落ちるので、土台から取る
+        window.decorView.windowInsetsController?.setSystemBarsAppearance(
             0,
             WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
         )
@@ -112,29 +119,33 @@ class HomeActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (!ready) return
         banner.visibility = if (isDefaultHome()) View.GONE else View.VISIBLE
         refreshModules()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (!ready) return
         // ホーム画面にいるときにホームボタンを押したら、アプリ一覧を閉じる
         if (drawer.visibility == View.VISIBLE) closeDrawer()
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
+        if (!ready) return
         if (drawer.visibility == View.VISIBLE) closeDrawer()
         // ホーム画面そのものは戻るボタンで閉じない
     }
 
     override fun onDestroy() {
-        repo.stop()
+        if (ready) repo.stop()
         super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (!ready) return
         refreshModules()
     }
 
