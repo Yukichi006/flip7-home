@@ -1,0 +1,79 @@
+name: Build APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# ワークフローに与える権限は読み取りだけにする
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      # 外部 Action はタグではなくコミット SHA で固定（タグの差し替え対策）
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # gradle-wrapper.jar が公式のものか検証する
+      - uses: gradle/actions/wrapper-validation@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: 署名鍵を用意
+        env:
+          KEYSTORE_B64: ${{ secrets.FLIPHOME_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/fliphome.jks"
+            echo "FLIPHOME_KEYSTORE=$RUNNER_TEMP/fliphome.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::FLIPHOME_KEYSTORE_B64 が未設定のため、毎回異なる鍵で署名されます（上書き更新できません）"
+          fi
+      # 公開するバージョン（VERSION ファイル）を、リリースのジョブに渡す
+      - name: バージョンを読む
+        id: version
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
+      - run: chmod +x gradlew && ./gradlew assembleDebug
+        env:
+          FLIPHOME_KEYSTORE_PASSWORD: ${{ secrets.FLIPHOME_KEYSTORE_PASSWORD }}
+      - name: APK の SHA-256 を表示
+        run: sha256sum app/build/outputs/apk/debug/*.apk | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fliphome-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+  # main の更新ごとに Releases へ APK を公開する（Obtainium がここから更新を取る）
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # 書き込み権限はリリースを作るこのジョブだけに与え、ビルドには渡さない
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fliphome-apk
+      - name: Releases に APK を公開
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.build.outputs.version }}
+        run: |
+          # 同じバージョンを二度公開しないよう、VERSION を上げ忘れていたら止める
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::error::$TAG は公開済みです。VERSION ファイルのバージョンを上げてください"
+            exit 1
+          fi
+          apk="fliphome-$TAG.apk"
+          mv app-debug.apk "$apk"
+          gh release create "$TAG" "$apk" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "FlipHome $TAG" \
+            --notes "SHA-256: $(sha256sum "$apk" | cut -d' ' -f1)"
