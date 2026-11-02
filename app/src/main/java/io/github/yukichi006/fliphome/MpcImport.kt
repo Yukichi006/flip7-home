@@ -13,7 +13,7 @@ import org.json.JSONObject
  * - ドットカレンダー（cal）→ 月のカレンダー（スワイプの割り当てと週の始まりも引き継ぐ）
  * - 見出し（title）→ 見出し、再生中の曲（media）→ 再生中の曲
  * - アプリ名の付け替え（appNames）→ 名前の付け替え
- * 天気（weather）は、天気の部品ができてから読み込む。
+ * - 天気（weather）→ 天気（地点・最高最低の表示・タップで開くアプリ）
  */
 object MpcImport {
     class Result(val home: Home, val names: Map<String, String>, val placed: Int, val skipped: List<String>)
@@ -106,6 +106,18 @@ object MpcImport {
                         ModuleType.TITLE
                     }
                     "media" -> ModuleType.MEDIA
+                    "weather" -> {
+                        o.optJSONObject("weather")?.let { wj ->
+                            wj.optString("city").takeIf { it.isNotEmpty() && it != "null" }?.let { props[Module.P_CITY] = it }
+                            if (wj.has("lat") && wj.has("lon")) {
+                                props[Module.P_LAT] = wj.getDouble("lat").toString()
+                                props[Module.P_LON] = wj.getDouble("lon").toString()
+                            }
+                            if (!wj.optBoolean("showMinMax", true)) props[Module.P_MINMAX] = "0"
+                            appKey(wj.optJSONObject("tapApp"))?.let { props[Module.P_TAP_APP] = it }
+                        }
+                        ModuleType.WEATHER
+                    }
                     else -> { skipped += "（部品：$type）"; return@mapNotNull null }
                 }
                 maxCol = maxOf(maxCol, col + w)

@@ -31,6 +31,7 @@ enum class ModuleType(val label: String, val note: String, val w: Int, val h: In
     CALENDAR("月のカレンダー", "今月を刺繍の点で。スワイプに動作を割り当てられる", 3, 3, true),
     TITLE("見出し", "ページの名前など", 3, 1, true),
     MEDIA("再生中の曲", "曲名と再生ボタン", 3, 1, true),
+    WEATHER("天気", "天気と 13 目盛りの温度計（地点を選ぶ）", 1, 3, true),
 }
 
 /**
@@ -75,6 +76,11 @@ data class Module(
         const val P_FUNCTION = "function"
         const val P_TOP_APP = "topApp"
         const val P_BOTTOM_APP = "bottomApp"
+        const val P_CITY = "city"
+        const val P_LAT = "lat"
+        const val P_LON = "lon"
+        const val P_MINMAX = "minmax"
+        const val P_TAP_APP = "tapApp"
 
         /** スワイプの向き（上下左右）ごとの動作のキー。値は "shade"・"drawer"・"app:<アプリのキー>"。 */
         fun gestureKey(dir: String) = "g.$dir"

@@ -215,6 +215,18 @@ class HomeActivity : Activity() {
                     onSwipe = { dir -> runGesture(m[Module.gestureKey(dir)]) })
                 ModuleType.MEDIA -> MediaView(this) { showBadgeSheet() }
                 ModuleType.SLIDER -> sliderFor(m)
+                ModuleType.WEATHER -> WeatherView(this, m[Module.P_CITY], m[Module.P_LAT]?.toDoubleOrNull(), m[Module.P_LON]?.toDoubleOrNull(),
+                    showMinMax = m[Module.P_MINMAX] != "0") {
+                    val app = m[Module.P_TAP_APP]?.let { repo.find(it) }
+                    when {
+                        app != null -> repo.launch(app, grid)
+                        m[Module.P_LAT] == null -> { enterEdit(); weatherPlaceSheet(m) }
+                        else -> {
+                            WeatherRepo.refresh(m[Module.P_LAT]!!.toDouble(), m[Module.P_LON]!!.toDouble(), force = true)
+                            toast("${m[Module.P_CITY] ?: ""} の天気を取り直しています")
+                        }
+                    }
+                }
             }
             if (m.type !in setOf(ModuleType.APP, ModuleType.FOLDER, ModuleType.SLIDER)) view.setOnLongClickListener { enterEdit(); true }
             grid.addModule(view, m)
@@ -479,6 +491,9 @@ class HomeActivity : Activity() {
             } else if (type == ModuleType.FOLDER) {
                 rebuildHome()
                 folderSheet(placed)
+            } else if (type == ModuleType.WEATHER) {
+                rebuildHome()
+                weatherPlaceSheet(placed)
             } else {
                 done()
             }
@@ -492,7 +507,7 @@ class HomeActivity : Activity() {
         when (m.type) {
             ModuleType.APP -> padSheet(m)
             ModuleType.FOLDER -> folderSheet(m)
-            ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.SLIDER, ModuleType.MEDIA -> instrumentSheet(m)
+            ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.SLIDER, ModuleType.MEDIA, ModuleType.WEATHER -> instrumentSheet(m)
             else -> openSheet(m.type.label) { s ->
                 s.setTabs(emptyList(), 0) {}
                 s.setBody(actionList(this, pageMoveItems(m) + listOf("外す" to { store.remove(page, m); done() }),
@@ -553,10 +568,24 @@ class HomeActivity : Activity() {
                 ) else emptyList()
             }
             ModuleType.MEDIA -> listOf("通知へのアクセスの設定" to { showBadgeSheet() })
+            ModuleType.WEATHER -> listOf(
+                "地点を選ぶ（いま：${m[Module.P_CITY] ?: "未設定"}）" to { s.setBody(PlacePicker(this) { p -> save(m.with(Module.P_CITY, p.name).with(Module.P_LAT, p.lat.toString()).with(Module.P_LON, p.lon.toString())) }) },
+                (if (m[Module.P_MINMAX] == "0") "最高・最低を出す" else "最高・最低を隠す") to { save(m.with(Module.P_MINMAX, if (m[Module.P_MINMAX] == "0") null else "0")) },
+                "タップで開くアプリ（いま：${m[Module.P_TAP_APP]?.let { repo.find(it) }?.let { repo.label(it) } ?: "なし（天気を取り直す）"}）" to appChooser(Module.P_TAP_APP),
+            ) + listOfNotNull(m[Module.P_TAP_APP]?.let { "タップで開くアプリをやめる" to { save(m.with(Module.P_TAP_APP, null)) } })
             else -> emptyList()
         }
         s.setBody(actionList(this, items + pageMoveItems(m) + listOf("外す" to { store.remove(page, m); done() }),
             note = "大きさは右下のつまみ、場所はドラッグで変えられます。"))
+    }
+
+    /** 天気の地点を選ぶパネルを、すぐに開く（置いた直後や、地点がまだないときにタップしたとき）。 */
+    private fun weatherPlaceSheet(m: Module) = openSheet("天気の地点") { s ->
+        s.setTabs(emptyList(), 0) {}
+        s.setBody(PlacePicker(this) { p ->
+            store.replace(page, m.with(Module.P_CITY, p.name).with(Module.P_LAT, p.lat.toString()).with(Module.P_LON, p.lon.toString()))
+            done()
+        })
     }
 
     /** 別のページへ移す項目（ページが 2 つ以上あるとき）。 */
@@ -763,7 +792,6 @@ class HomeActivity : Activity() {
             append("${pages} ページ、${result.placed} 個の部品を読み込み、今の配置と置き換えます。")
             append("（${result.home.cols} 列 × ${result.home.rows} 行、下段のポケットは隠します）")
             if (result.skipped.isNotEmpty()) append("\n\n見つからず飛ばすもの：${result.skipped.take(12).joinToString("、")}")
-            append("\n\n天気は、天気の部品ができてから読み込めます。")
         }
         android.app.AlertDialog.Builder(this)
             .setTitle("MPC の配置を読み込む")

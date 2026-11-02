@@ -11,9 +11,10 @@
     <!-- 下へスワイプで通知を開く -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
 
-    <!-- インターネットには一切つながない（端末の中のデータが外へ出ることはない）。
-         今後ライブラリなどが勝手にこの権限を足しても、ここで取り除く -->
-    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <!-- 天気の部品のためだけに、インターネットにつなぐ。つなぐ先は Open-Meteo（api.open-meteo.com と
+         geocoding-api.open-meteo.com）だけで、送るのは選んだ地点の緯度・経度と、地点を探すときの地名だけ。
+         暗号化しない通信（http）は network_security_config で禁止している -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <queries>
         <!-- ホーム画面とアプリ一覧に、インストール済みのアプリを並べる -->
@@ -36,6 +37,7 @@
     <application
         android:name=".FlipHomeApp"
         android:allowBackup="false"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.FlipHome">
