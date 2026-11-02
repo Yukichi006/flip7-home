@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- 「今日の予定」に、今日の予定を表示する -->
     <uses-permission android:name="android.permission.READ_CALENDAR" />
@@ -7,6 +8,10 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- 下へスワイプで通知を開く -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+
+    <!-- インターネットには一切つながない（端末の中のデータが外へ出ることはない）。
+         今後ライブラリなどが勝手にこの権限を足しても、ここで取り除く -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
 
     <queries>
         <!-- ホーム画面とアプリ一覧に、インストール済みのアプリを並べる -->
@@ -27,7 +32,7 @@
     </queries>
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.FlipHome">

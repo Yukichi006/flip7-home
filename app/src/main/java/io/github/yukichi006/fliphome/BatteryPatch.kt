@@ -85,7 +85,10 @@ class BatteryPatch(context: Context) : PatchView(context) {
             addAction(ACTION_BT_BATTERY)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
         }
-        context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)?.let { readPhone(it) }
+        // Bluetooth の残量の通知はシステムの Bluetooth から届くので外部からの受け取りを許すが、
+        // 送り手に「付近のデバイス」の権限を求め、ほかのアプリが偽の残量を送り込みにくくする
+        context.registerReceiver(receiver, filter, Manifest.permission.BLUETOOTH_CONNECT, null, Context.RECEIVER_EXPORTED)
+            ?.let { readPhone(it) }
         BleBattery.addListener(onBleLevel)
         post(poll)
     }
