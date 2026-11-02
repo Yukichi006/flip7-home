@@ -148,10 +148,10 @@ class PadView(
         val name = repo.label(shown)
         val text = android.text.TextUtils.ellipsize(name, label, width - inner * 2, android.text.TextUtils.TruncateAt.END)
         canvas.drawText(text, 0, text.length, width / 2f, top + iconPx + context.dp(3f) + label.textSize, label)
-        // 2 つ目のアプリがあることを、下の小さな山形のステッチで知らせる
+        // 2 つ目のアプリがあることを、左上の小さな山形のステッチで知らせる
         if (second != null && framed) {
-            val cx = width / 2f
-            val y = height - patch.margin - context.dp(7f)
+            val cx = patch.margin + context.dp(17f)
+            val y = patch.margin + context.dp(15f)
             val k = context.dp(3f)
             canvas.drawPath(Path().apply { moveTo(cx - k, y - k * 0.5f); lineTo(cx, y + k * 0.3f); lineTo(cx + k, y - k * 0.5f) }, hint)
         }

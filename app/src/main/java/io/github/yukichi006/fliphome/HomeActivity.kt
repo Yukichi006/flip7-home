@@ -207,8 +207,16 @@ class HomeActivity : Activity() {
                 ModuleType.FOLDER -> FolderKnob(this, m[Module.P_NAME] ?: "フォルダ",
                     m.folderApps.mapNotNull { repo.find(it)?.component?.packageName },
                     onOpen = { v -> showFolder(m, v) }, onLongPress = { enterEdit() })
+                ModuleType.TIME -> TimeView(this, Align.parse(m[Module.P_ALIGN], "mr"), m[Module.P_SECONDS] == "1")
+                ModuleType.DATE -> DateView(this, Align.parse(m[Module.P_ALIGN], "ml"), m[Module.P_STYLE])
+                ModuleType.TITLE -> TitleView(this, m[Module.P_TEXT] ?: "${page + 1}", Align.parse(m[Module.P_ALIGN], "bl"))
+                ModuleType.CALENDAR -> DotCalendarView(this, m[Module.P_MONDAY] == "1",
+                    hasSwipe = { !m[Module.gestureKey(it)].isNullOrEmpty() },
+                    onSwipe = { dir -> runGesture(m[Module.gestureKey(dir)]) })
+                ModuleType.MEDIA -> MediaView(this) { showBadgeSheet() }
+                ModuleType.SLIDER -> sliderFor(m)
             }
-            if (m.type !in setOf(ModuleType.APP, ModuleType.FOLDER)) view.setOnLongClickListener { enterEdit(); true }
+            if (m.type !in setOf(ModuleType.APP, ModuleType.FOLDER, ModuleType.SLIDER)) view.setOnLongClickListener { enterEdit(); true }
             grid.addModule(view, m)
         }
         dots.count = home.pages.size
@@ -227,6 +235,46 @@ class HomeActivity : Activity() {
                 is BatteryPatch -> v.refresh()
             }
         }
+    }
+
+    /** 部品に割り当てた動作を行う（通知を開く・アプリ一覧を開く・アプリを開く）。 */
+    private fun runGesture(action: String?) {
+        when {
+            action.isNullOrEmpty() -> {}
+            action == "shade" -> expandNotifications()
+            action == "drawer" -> openDrawer()
+            action.startsWith("app:") -> repo.find(action.removePrefix("app:"))?.let { repo.launch(it, grid) }
+        }
+    }
+
+    private fun gestureLabel(action: String?): String = when {
+        action.isNullOrEmpty() -> "なし"
+        action == "shade" -> "通知を開く"
+        action == "drawer" -> "アプリ一覧を開く"
+        action.startsWith("app:") -> repo.find(action.removePrefix("app:"))?.let { repo.label(it) } ?: "（使えないアプリ）"
+        else -> "なし"
+    }
+
+    private fun sliderFor(m: Module): View {
+        val function = m[Module.P_FUNCTION] ?: "volume"
+        val label = when (function) { "brightness" -> "BRT"; "app" -> "APP"; else -> "VOL" }
+        return ZipperFader(this, function, label,
+            onEnd = { top -> (if (top) m[Module.P_TOP_APP] else m[Module.P_BOTTOM_APP])?.let { repo.find(it) }?.let { repo.launch(it, grid) } },
+            needPermission = { showBrightnessSheet() },
+        ).apply { setOnLongClickListener { enterEdit(); true } }
+    }
+
+    private fun showBrightnessSheet() = openSheet("明るさのフェーダー") { s ->
+        s.setTabs(emptyList(), 0) {}
+        s.setBody(actionList(this, listOf(
+            "「システム設定の変更」の画面を開く" to {
+                runCatching {
+                    startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, android.net.Uri.parse("package:$packageName")))
+                }
+                closeSheet()
+            },
+        ), note = "画面の明るさを変えるには、「システム設定の変更」で FlipHome を許可してください。\n" +
+            "明るさと、明るさの自動調整のオン・オフだけを変えます。"))
     }
 
     // ------------------------------------------------------------------
@@ -378,13 +426,13 @@ class HomeActivity : Activity() {
             .show()
     }
 
-    private fun showBadgeSheet() = openSheet("通知の印") { s ->
+    private fun showBadgeSheet() = openSheet("通知へのアクセス") { s ->
         s.setTabs(emptyList(), 0) {}
         s.setBody(actionList(this, listOf(
             "通知へのアクセスの設定を開く" to { Badges.openSettings(this) },
-        ), note = "通知が来ているアプリのパッドに、糸の玉の印を付けます。\n" +
+        ), note = "通知が来ているアプリのパッドに糸の玉の印を付け、再生中の曲を表示します。\n" +
             "そのために「通知へのアクセス」で FlipHome を許可してください。\n" +
-            "使うのは「どのアプリに通知が来ているか」だけで、通知の中身は読みません。保存も、外へ送ることもしません。"))
+            "使うのは「どのアプリに通知が来ているか」と「再生中の曲」だけで、通知の中身は読みません。保存も、外へ送ることもしません。"))
     }
 
     // ------------------------------------------------------------------
@@ -437,12 +485,71 @@ class HomeActivity : Activity() {
         when (m.type) {
             ModuleType.APP -> padSheet(m)
             ModuleType.FOLDER -> folderSheet(m)
+            ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.SLIDER, ModuleType.MEDIA -> instrumentSheet(m)
             else -> openSheet(m.type.label) { s ->
                 s.setTabs(emptyList(), 0) {}
                 s.setBody(actionList(this, pageMoveItems(m) + listOf("外す" to { store.remove(page, m); done() }),
                     note = "大きさは右下のつまみ、場所はドラッグで変えられます。"))
             }
         }
+    }
+
+    /** 時刻・日付・見出し・カレンダー・フェーダー・再生中の曲の設定。 */
+    private fun instrumentSheet(m: Module) = openSheet(m.type.label) { s ->
+        s.setTabs(emptyList(), 0) {}
+        fun save(new: Module) { store.replace(page, new); done() }
+        fun alignItem(default: String) = "寄せ方（いま：${Align.CHOICES.firstOrNull { it.first == (m[Module.P_ALIGN] ?: default) }?.second ?: "真ん中"}）" to {
+            s.setBody(actionList(this, Align.CHOICES.map { (key, name) -> name to { save(m.with(Module.P_ALIGN, key)) } }))
+        }
+        fun appChooser(key: String) = { s.setBody(AppPicker(this, repo) { app -> save(m.with(key, app.key)) }) }
+        val items: List<Pair<String, () -> Unit>> = when (m.type) {
+            ModuleType.TIME -> listOf(
+                (if (m[Module.P_SECONDS] == "1") "秒を隠す" else "秒を出す") to { save(m.with(Module.P_SECONDS, if (m[Module.P_SECONDS] == "1") null else "1")) },
+                alignItem("mr"),
+            )
+            ModuleType.DATE -> listOf(
+                (if (m[Module.P_STYLE] == "dot") "「11月2日（月）」の形にする" else "「11.02 MON」の形にする") to {
+                    save(m.with(Module.P_STYLE, if (m[Module.P_STYLE] == "dot") null else "dot"))
+                },
+                alignItem("ml"),
+            )
+            ModuleType.TITLE -> listOf(
+                "文字を変える（いま：${m[Module.P_TEXT] ?: "${page + 1}"}）" to {
+                    s.setBody(renameBody(this, m[Module.P_TEXT] ?: "", null) { t -> save(m.with(Module.P_TEXT, t?.trim()?.ifEmpty { null })) })
+                },
+                alignItem("bl"),
+            )
+            ModuleType.CALENDAR -> listOf(
+                (if (m[Module.P_MONDAY] == "1") "週の始まりを日曜にする" else "週の始まりを月曜にする") to {
+                    save(m.with(Module.P_MONDAY, if (m[Module.P_MONDAY] == "1") null else "1"))
+                },
+            ) + listOf("up" to "上", "down" to "下", "left" to "左", "right" to "右").map { (dir, name) ->
+                "${name}へスワイプ（いま：${gestureLabel(m[Module.gestureKey(dir)])}）" to {
+                    val key = Module.gestureKey(dir)
+                    s.setBody(actionList(this, listOf(
+                        "なし" to { save(m.with(key, null)) },
+                        "通知を開く" to { save(m.with(key, "shade")) },
+                        "アプリ一覧を開く" to { save(m.with(key, "drawer")) },
+                        "アプリを開く…" to { s.setBody(AppPicker(this, repo) { app -> save(m.with(key, "app:${app.key}")) }) },
+                    )))
+                }
+            }
+            ModuleType.SLIDER -> {
+                val f = m[Module.P_FUNCTION] ?: "volume"
+                listOf(
+                    "音量にする" to { save(m.with(Module.P_FUNCTION, "volume")) },
+                    "明るさにする" to { save(m.with(Module.P_FUNCTION, "brightness")) },
+                    "アプリを開くバネにする" to { save(m.with(Module.P_FUNCTION, "app")) },
+                ).filter { !it.first.startsWith(when (f) { "brightness" -> "明るさ"; "app" -> "アプリ"; else -> "音量" }) } + if (f == "app") listOf(
+                    "上端で開くアプリ（いま：${m[Module.P_TOP_APP]?.let { repo.find(it) }?.let { repo.label(it) } ?: "なし"}）" to appChooser(Module.P_TOP_APP),
+                    "下端で開くアプリ（いま：${m[Module.P_BOTTOM_APP]?.let { repo.find(it) }?.let { repo.label(it) } ?: "なし"}）" to appChooser(Module.P_BOTTOM_APP),
+                ) else emptyList()
+            }
+            ModuleType.MEDIA -> listOf("通知へのアクセスの設定" to { showBadgeSheet() })
+            else -> emptyList()
+        }
+        s.setBody(actionList(this, items + pageMoveItems(m) + listOf("外す" to { store.remove(page, m); done() }),
+            note = "大きさは右下のつまみ、場所はドラッグで変えられます。"))
     }
 
     /** 別のページへ移す項目（ページが 2 つ以上あるとき）。 */

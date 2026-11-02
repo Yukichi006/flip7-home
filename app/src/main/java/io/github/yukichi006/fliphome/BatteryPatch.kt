@@ -140,6 +140,9 @@ class BatteryPatch(context: Context) : PatchView(context) {
     }
 
     override fun drawContent(canvas: Canvas, area: RectF) {
+        // 細いワッペンでも見出しが収まるよう、幅に合わせて文字を小さくする
+        title.textSize = context.sp(10.5f)
+        title.textSize = (title.textSize * area.width() / title.measureText("BATTERY")).coerceAtMost(context.sp(10.5f))
         var y = area.top + title.textSize
         canvas.drawText("BATTERY", area.left, y, title)
         val shown = rows.ifEmpty { return }

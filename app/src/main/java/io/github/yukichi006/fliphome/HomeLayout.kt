@@ -25,6 +25,12 @@ enum class ModuleType(val label: String, val note: String, val w: Int, val h: In
     CLOCK("時計と日付", "大きな時計と日付", 5, 2, true),
     AGENDA("今日の予定", "今日これからの予定", 3, 2, true),
     BATTERY("電池", "本体と Bluetooth 機器の残量", 2, 2, true),
+    SLIDER("フェーダー", "音量・明るさ・アプリを開くバネ", 1, 2, true),
+    TIME("時刻", "時刻だけ（秒も出せる）", 3, 1, true),
+    DATE("日付", "日付だけ", 3, 1, true),
+    CALENDAR("月のカレンダー", "今月を刺繍の点で。スワイプに動作を割り当てられる", 3, 3, true),
+    TITLE("見出し", "ページの名前など", 3, 1, true),
+    MEDIA("再生中の曲", "曲名と再生ボタン", 3, 1, true),
 }
 
 /**
@@ -61,6 +67,17 @@ data class Module(
         const val P_LONG_APP = "longApp"
         const val P_NAME = "name"
         const val P_APPS = "apps"
+        const val P_ALIGN = "align"
+        const val P_SECONDS = "seconds"
+        const val P_STYLE = "style"
+        const val P_TEXT = "text"
+        const val P_MONDAY = "monday"
+        const val P_FUNCTION = "function"
+        const val P_TOP_APP = "topApp"
+        const val P_BOTTOM_APP = "bottomApp"
+
+        /** スワイプの向き（上下左右）ごとの動作のキー。値は "shade"・"drawer"・"app:<アプリのキー>"。 */
+        fun gestureKey(dir: String) = "g.$dir"
 
         fun fromJson(o: JSONObject): Module? = runCatching {
             val p = o.optJSONObject("props")
