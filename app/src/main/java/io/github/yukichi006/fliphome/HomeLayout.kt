@@ -19,7 +19,17 @@ import kotlin.math.roundToInt
  * ホーム画面のマス目に置く部品の種類。[w], [h] は置いたときの最初の大きさ（マスの数）。
  * [addable] が false のものは「部品」の一覧に出さない（アプリは「アプリ」タブから置く）。
  */
-enum class ModuleType(val label: String, val note: String, val w: Int, val h: Int, val resizable: Boolean, val addable: Boolean = true) {
+enum class ModuleType(
+    val label: String,
+    val note: String,
+    val w: Int,
+    val h: Int,
+    val resizable: Boolean,
+    val addable: Boolean = true,
+    /** 大きさを変えるときの、いちばん小さい幅と、いちばん大きい高さ。 */
+    val minW: Int = 1,
+    val maxH: Int = 99,
+) {
     APP("アプリ", "", 1, 1, false, addable = false),
     FOLDER("巾着", "複数のアプリをまとめるフォルダ", 1, 1, false),
     CLOCK("時計と日付", "大きな時計と日付", 5, 2, true),
@@ -33,6 +43,7 @@ enum class ModuleType(val label: String, val note: String, val w: Int, val h: In
     MEDIA("再生中の曲", "曲名と再生ボタン", 3, 1, true),
     WEATHER("天気", "天気と 13 目盛りの温度計（地点を選ぶ）", 1, 3, true),
     ANALOG("アナログ時計", "カバー画面と同じ、刺繍の文字盤の時計", 2, 2, true),
+    ZIP("ファスナー（アプリ一覧）", "横向きの大きなファスナー。左から右へ開くと、アプリ一覧に切り替わる", 3, 1, true, minW = 2, maxH = 1),
 }
 
 /**
@@ -172,7 +183,7 @@ class LayoutStore(context: Context) {
     fun placeAt(page: Int, type: ModuleType, col: Int, row: Int, props: Map<String, String> = emptyMap()): Module? {
         val h = home
         val list = modules(page)
-        for (hh in type.h downTo 1) for (ww in type.w downTo 1) {
+        for (hh in minOf(type.h, type.maxH) downTo 1) for (ww in type.w downTo type.minW) {
             val m = Module(0, type, col, row, ww, hh, props)
             if (fits(h, list, m)) return m.copy(id = newId()).also { new -> updatePage(page) { it + new } }
         }
@@ -496,7 +507,7 @@ class Board(
     /** [type] の部品を [col], [row] に置く。最初の大きさが入らなければ、入るところまで小さくする。 */
     fun placeAt(type: ModuleType, col: Int, row: Int, props: Map<String, String> = emptyMap()): Module? {
         val list = read()
-        for (hh in minOf(type.h, rows) downTo 1) for (ww in minOf(type.w, cols) downTo 1) {
+        for (hh in minOf(type.h, rows, type.maxH) downTo 1) for (ww in minOf(type.w, cols) downTo type.minW) {
             val m = Module(-1, type, col, row, ww, hh, props)
             if (fits(list, m)) return m.copy(id = newId()).also { write(list + it) }
         }
@@ -742,8 +753,8 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
                 if (moved && m != null && v != null && !removeHit) {
                     val all = list.map { it.second }
                     val target = if (resizing) {
-                        val w = ((ev.x - m.col * cellW()) / cellW()).roundToInt().coerceIn(1, cols - m.col)
-                        val h = ((ev.y - gridTop() - m.row * cellH()) / cellH()).roundToInt().coerceIn(1, rows - m.row)
+                        val w = ((ev.x - m.col * cellW()) / cellW()).roundToInt().coerceIn(1, cols - m.col).coerceAtLeast(m.type.minW)
+                        val h = ((ev.y - gridTop() - m.row * cellH()) / cellH()).roundToInt().coerceIn(1, minOf(rows - m.row, m.type.maxH).coerceAtLeast(1))
                         m.copy(w = w, h = h)
                     } else {
                         v.translationX = dx

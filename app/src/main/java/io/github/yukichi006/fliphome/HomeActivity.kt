@@ -297,6 +297,7 @@ class HomeActivity : Activity() {
         val view: View = when (m.type) {
             ModuleType.CLOCK -> ClockView(this)
             ModuleType.ANALOG -> AnalogClockView(this)
+            ModuleType.ZIP -> ZipperDrawerView(this, onOpen = { openDrawer() }, onLongPress = { enterEdit() })
             ModuleType.AGENDA -> AgendaView(this)
             ModuleType.BATTERY -> BatteryPatch(this)
             // アンインストールされたアプリ（や一時的に使えない仕事用のアプリ）は表示しないだけで、配置は残す
@@ -331,7 +332,7 @@ class HomeActivity : Activity() {
                 }
             }
         }
-        if (m.type !in setOf(ModuleType.APP, ModuleType.FOLDER, ModuleType.SLIDER)) view.setOnLongClickListener { enterEdit(); true }
+        if (m.type !in setOf(ModuleType.APP, ModuleType.FOLDER, ModuleType.SLIDER, ModuleType.ZIP)) view.setOnLongClickListener { enterEdit(); true }
         val bare = m.type in setOf(ModuleType.CLOCK, ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.WEATHER)
         if (!inPatch || !bare) return view
         // 片手の画面の左の列では、情報をワッペンに載せてそろえる
