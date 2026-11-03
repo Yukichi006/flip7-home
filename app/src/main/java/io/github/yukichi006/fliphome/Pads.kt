@@ -406,8 +406,11 @@ class FolderPouch(
     private val packages: List<String>,
     private val onOpen: (View) -> Unit,
     private val onLongPress: () -> Unit,
+    /** 袋に刺繍するジャンルのアイコン（アプリ一覧のジャンル別の巾着）。 */
+    private val genre: Genre? = null,
 ) : View(context), SewAware {
     private val felt = Fabric.paint(context, Cloth.FELT)
+    private val iconPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { alpha = 200 }
     private val inside = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF050505.toInt() }
     private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Cloth.FELT
@@ -495,6 +498,11 @@ class FolderPouch(
         canvas.scale(0.82f, 0.84f, cx, neckY + (bottom - neckY) * 0.56f)
         canvas.drawPath(body, seam)
         canvas.restore()
+        // ジャンルのアイコンを、袋のふくらみの真ん中に刺繍する
+        genre?.let { g ->
+            val px = (s * 0.3f).toInt().coerceAtLeast(dpi(12f))
+            canvas.drawBitmap(GenreIcons.bitmap(g, px), cx - px / 2f, neckY + (bottom - neckY) * 0.56f - px / 2f, iconPaint)
+        }
         // 口のフリル（3 つの小さな山）。開くと口の中（暗い所）が見える
         val fw = neckW * (1.7f + 0.3f * openness)
         val frillTop = neckY - s * (0.13f + 0.04f * openness)
@@ -591,7 +599,8 @@ class FolderPopover(
         getLocationInWindow(me)
         val ay = loc[1] - me[1]
         val bh = bubble.measuredHeight
-        val y = if (ay - bh > dpi(24f)) ay - bh else ay + anchor.height
+        val y = (if (ay - bh > dpi(24f)) ay - bh else ay + anchor.height)
+            .coerceAtMost(height - bh - dpi(24f)).coerceAtLeast(dpi(24f))
         bubble.layout(dpi(8f), y, width - dpi(8f), y + bh)
         if (!shown) {
             shown = true
@@ -773,5 +782,44 @@ class PageDots(context: Context, private val onPick: (Int) -> Unit) : View(conte
             onPick(i)
         }
         return true
+    }
+}
+
+/**
+ * 下段のポケットに置く「アプリ一覧」のボタン。ほかのアプリと同じ大きさで、9 つの小さな四角を縫ったアイコンと「アプリ一覧」の文字。
+ * タップで [onOpen]、長押しで [onLongPress]。
+ */
+@SuppressLint("ViewConstructor")
+class DrawerButton(context: Context, private val onOpen: () -> Unit, private val onLongPress: () -> Unit) : View(context), SewAware {
+    private val label = context.threadText(9.5f).apply {
+        textAlign = Paint.Align.CENTER
+        letterSpacing = 0.02f
+    }
+    private val rect = RectF()
+
+    init {
+        setOnClickListener { onOpen() }
+        setOnLongClickListener { onLongPress(); true }
+        contentDescription = "アプリ一覧"
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        // 大きさの決め方は、下段のアプリ（PadView の framed = false）とそろえる
+        val inner = dp(2f)
+        val labelH = label.textSize * 1.3f
+        val iconPx = min(width - inner * 2, height - inner * 2 - labelH).coerceAtMost(dp(46f)).coerceAtLeast(dp(16f))
+        val total = iconPx + dp(3f) + labelH
+        val top = (height - total) / 2f
+        val left = (width - iconPx) / 2f
+        // 3×3 の小さな四角（48 の目盛りで、PadView のアイコンと同じ太さの糸）
+        val u = iconPx / 48f
+        val paint = stitchPaint(iconPx * 0.05f, iconPx * 0.105f, iconPx * 0.075f)
+        for (r in 0 until 3) for (c in 0 until 3) {
+            val x = left + (6f + c * 13.5f) * u
+            val y = top + (6f + r * 13.5f) * u
+            rect.set(x, y, x + 9f * u, y + 9f * u)
+            canvas.drawRoundRect(rect, 2.2f * u, 2.2f * u, paint)
+        }
+        canvas.drawText("アプリ一覧", width / 2f, top + iconPx + dp(3f) + label.textSize, label)
     }
 }

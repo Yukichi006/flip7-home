@@ -373,7 +373,7 @@ class LayoutStore(context: Context) {
             Module(newId(), ModuleType.BATTERY, 0, 6, 2, 2),
         )
         val apps = (h.pages.flatMap { p -> p.modules.filter { it.type == ModuleType.APP || it.type == ModuleType.FOLDER }.sortedWith(compareBy({ it.row }, { it.col })) } +
-            h.dock.filterNotNull().map { Module(0, ModuleType.APP, 0, 0, 1, 1, mapOf(Module.P_APP to it)) })
+            h.dock.filterNotNull().filterNot { it.startsWith("@") }.map { Module(0, ModuleType.APP, 0, 0, 1, 1, mapOf(Module.P_APP to it)) })
             .distinctBy { it[Module.P_APP] ?: "folder:${it.id}" }
         val rows = Thumb.DEFAULT_ROWS
         val perSheet = Thumb.COLS * rows
@@ -422,6 +422,9 @@ class LayoutStore(context: Context) {
 
     companion object {
         const val DOCK_SLOTS = 4
+
+        /** 下段の枠に置く「アプリ一覧」のボタン（アプリのキーの代わりに入れる）。 */
+        const val DRAWER_KEY = "@drawer"
         const val MIN_COLS = 3
         const val MAX_COLS = 6
         const val MIN_ROWS = 4

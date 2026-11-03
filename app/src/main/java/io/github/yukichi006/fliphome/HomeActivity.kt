@@ -188,6 +188,7 @@ class HomeActivity : Activity() {
         when {
             popover != null -> popover?.dismiss()
             sheet != null -> sheet?.dismiss()
+            drawer.visibility == View.VISIBLE && drawer.dismissPopover() -> Unit
             editing -> exitEdit()
             drawer.visibility == View.VISIBLE -> closeDrawer()
         }
@@ -245,7 +246,10 @@ class HomeActivity : Activity() {
     /** 下段のポケット（マス目の画面でも片手の画面でも同じ中身）。 */
     private fun rebuildDock(home: Home) {
         dock.visibility = if (home.pocket) View.VISIBLE else View.GONE
-        dock.setCells(home.dock.map { key -> key?.let { repo.find(it) }?.let { app -> PadView(this, app, repo, framed = false) { enterEdit() } } })
+        dock.setCells(home.dock.map { key ->
+            if (key == LayoutStore.DRAWER_KEY) DrawerButton(this, onOpen = { openDrawer() }, onLongPress = { enterEdit() })
+            else key?.let { repo.find(it) }?.let { app -> PadView(this, app, repo, framed = false) { enterEdit() } }
+        })
         dock.editing = editing
     }
 
@@ -797,8 +801,12 @@ class HomeActivity : Activity() {
                 if (drawer.visibility == View.VISIBLE) drawer.rebuild()
             })
         },
-        "アイコンを変える（いま：${repo.genre(app).label}）" to {
-            s.setBody(genrePicker(this, store.genreOf(app.key)) { g -> store.setGenre(app.key, g); done() })
+        "ジャンル（アイコン）を変える（いま：${repo.genre(app).label}）" to {
+            s.setBody(genrePicker(this, store.genreOf(app.key)) { g ->
+                store.setGenre(app.key, g)
+                done()
+                if (drawer.visibility == View.VISIBLE) drawer.rebuild()
+            })
         },
         "アプリ情報・アンインストール" to { repo.openDetails(app) },
     )
@@ -828,11 +836,26 @@ class HomeActivity : Activity() {
 
     /** 下段の枠をタップしたとき。 */
     private fun showDockSheet(index: Int) {
-        val app = store.home.dock.getOrNull(index)?.let { repo.find(it) }
-        if (app == null) {
-            openSheet("下段に置くアプリ") { s ->
+        val key = store.home.dock.getOrNull(index)
+        val drawerButton = listOf("アプリ一覧のボタンを置く" to { store.setDockSlot(index, LayoutStore.DRAWER_KEY); done() })
+        if (key == LayoutStore.DRAWER_KEY) {
+            openSheet("アプリ一覧のボタン") { s ->
                 s.setTabs(emptyList(), 0) {}
-                s.setBody(AppPicker(this, repo) { picked -> store.setDockSlot(index, picked.key); done() })
+                s.setBody(actionList(this, listOf(
+                    "アプリに変える" to { s.setBody(AppPicker(this, repo) { new -> store.setDockSlot(index, new.key); done() }) },
+                    "外す" to { store.setDockSlot(index, null); done() },
+                ), note = "タップすると、アプリ一覧が開きます。"))
+            }
+            return
+        }
+        val app = key?.let { repo.find(it) }
+        if (app == null) {
+            openSheet("下段に置く") { s ->
+                // 「アプリ」と「アプリ一覧のボタン」から選ぶ
+                fun show(tab: Int) = s.setBody(if (tab == 0) AppPicker(this, repo) { picked -> store.setDockSlot(index, picked.key); done() }
+                    else actionList(this, drawerButton, note = "ほかのアプリと同じ大きさのボタンです。タップすると、アプリ一覧が開きます。"))
+                s.setTabs(listOf("アプリ", "アプリ一覧のボタン"), 0) { show(it) }
+                show(0)
             }
             return
         }
@@ -840,7 +863,7 @@ class HomeActivity : Activity() {
             s.setTabs(emptyList(), 0) {}
             s.setBody(actionList(this, listOf(
                 "アプリを変える" to { s.setBody(AppPicker(this, repo) { new -> store.setDockSlot(index, new.key); done() }) },
-            ) + appItems(app, s) + listOf("外す" to { store.setDockSlot(index, null); done() })))
+            ) + drawerButton.map { (_, act) -> "アプリ一覧のボタンに変える" to act } + appItems(app, s) + listOf("外す" to { store.setDockSlot(index, null); done() })))
         }
     }
 
@@ -892,7 +915,7 @@ class HomeActivity : Activity() {
                     true
                 }
             }
-            menu.add("アプリ情報・アンインストール").setOnMenuItemClickListener { repo.openDetails(app); true }
+            commonDrawerItems(app)
             return@apply
         }
         val onPage = store.pageOfApp(app.key)
@@ -913,11 +936,31 @@ class HomeActivity : Activity() {
                 true
             }
         }
+        commonDrawerItems(app)
+    }.show()
+
+    /** アプリ一覧の長押しメニューの、どちらの画面でも出す項目（ジャンル・下段・アプリ情報）。 */
+    private fun PopupMenu.commonDrawerItems(app: AppEntry) {
+        menu.add("ジャンル（アイコン）を変える（いま：${repo.genre(app).label}）").setOnMenuItemClickListener {
+            openSheet("${repo.label(app)} のジャンル") { s ->
+                s.setTabs(emptyList(), 0) {}
+                s.setBody(genrePicker(this@HomeActivity, store.genreOf(app.key)) { g ->
+                    store.setGenre(app.key, g)
+                    done()
+                    drawer.rebuild()
+                })
+            }
+            true
+        }
         val slots = store.home.dock
         if (app.key !in slots) {
             val sub = menu.addSubMenu("下段に置く")
             slots.forEachIndexed { i, key ->
-                val now = key?.let { repo.find(it)?.let { a -> repo.label(a) } } ?: "空き"
+                val now = when (key) {
+                    null -> "空き"
+                    LayoutStore.DRAWER_KEY -> "アプリ一覧のボタン"
+                    else -> repo.find(key)?.let { a -> repo.label(a) } ?: "空き"
+                }
                 sub.add("${i + 1} 番目（$now）").setOnMenuItemClickListener {
                     store.setDockSlot(i, app.key)
                     rebuildHome()
@@ -926,7 +969,7 @@ class HomeActivity : Activity() {
             }
         }
         menu.add("アプリ情報・アンインストール").setOnMenuItemClickListener { repo.openDetails(app); true }
-    }.show()
+    }
 
     private fun versionName() =
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull().orEmpty()
