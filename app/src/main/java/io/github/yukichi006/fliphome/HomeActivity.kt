@@ -122,7 +122,7 @@ class HomeActivity : Activity() {
             setMargins(dpi(6f), 0, dpi(6f), 0)
         })
 
-        drawer = DrawerView(this, repo, onMenu = { app, v -> showDrawerMenu(app, v) }, onClose = { closeDrawer() })
+        drawer = DrawerView(this, repo, onMenu = { app, _ -> showAppSettings(app) }, onClose = { closeDrawer() })
         drawer.visibility = View.GONE
         root.addView(drawer, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
 
@@ -913,51 +913,91 @@ class HomeActivity : Activity() {
     }
 
     /** アプリ一覧でアプリを長押ししたとき。 */
-    private fun showDrawerMenu(app: AppEntry, view: View) = PopupMenu(this, view, Gravity.CENTER).apply {
+    /** アプリ一覧でアプリを長押ししたとき：そのアプリの設定（名前・アイコン・ジャンル・置き場所）を 1 枚で。 */
+    private fun showAppSettings(app: AppEntry) {
+        val s = sheet?.takeIf { it.parent != null && it.tag == APP_SETTINGS }
+        if (s != null) {
+            fillAppSettings(s, app)
+            return
+        }
+        openSheet(repo.label(app)) { sh ->
+            sh.tag = APP_SETTINGS
+            sh.setTabs(emptyList(), 0) {}
+            fillAppSettings(sh, app)
+        }
+    }
+
+    private fun fillAppSettings(s: Sheet, app: AppEntry) {
+        s.setTitle(repo.label(app))
+        s.setBody(AppSettingsView(this, repo, store, app,
+            onChanged = {
+                s.setTitle(repo.label(app))
+                rebuildHome()
+                if (drawer.visibility == View.VISIBLE) drawer.rebuild()
+            },
+            onNavigate = { other -> fillAppSettings(s, other) },
+            actions = { placeActions(app, s) }))
+    }
+
+    /** アプリの置き場所などのボタン（パネル／ホーム・下段・アプリ情報）。 */
+    private fun placeActions(app: AppEntry, s: Sheet): List<Pair<String, () -> Unit>> {
+        val items = mutableListOf<Pair<String, () -> Unit>>()
         if (store.thumbMode) {
             val t = store.thumb
             val at = t.sheets.indexOfFirst { p -> p.modules.any { it.type == ModuleType.APP && it[Module.P_APP] == app.key } }
             if (at >= 0) {
-                menu.add("パネルから外す（${at + 1} 枚目）").setOnMenuItemClickListener {
+                items += "パネルから外す（${at + 1} 枚目）" to {
                     store.thumb = t.copy(sheets = t.sheets.map { p -> Page(p.modules.filterNot { it.type == ModuleType.APP && it[Module.P_APP] == app.key }) })
                     rebuildHome()
-                    true
+                    fillAppSettings(s, app)
                 }
             } else {
-                menu.add("パネルに追加").setOnMenuItemClickListener {
+                items += "パネルに追加" to {
                     // 今の布から順に、空いている所を探して置く
                     val order = (0 until t.sheets.size).map { (bookIndex + it) % t.sheets.size }
                     val placed = order.firstOrNull { store.sheetBoard(it).add(ModuleType.APP, mapOf(Module.P_APP to app.key)) != null }
                     if (placed != null) {
                         rebuildHome()
                         toast("${repo.label(app)} をパネルの ${placed + 1} 枚目に置きました")
+                        fillAppSettings(s, app)
                     } else toast("パネルに空きがありません（「…」から布を足せます）")
-                    true
                 }
-            }
-            commonDrawerItems(app)
-            return@apply
-        }
-        val onPage = store.pageOfApp(app.key)
-        if (onPage != null) {
-            menu.add("ホームから外す（${onPage + 1} ページ目）").setOnMenuItemClickListener {
-                store.removeApp(app.key)
-                rebuildHome()
-                true
             }
         } else {
-            menu.add("ホームに追加（${page + 1} ページ目）").setOnMenuItemClickListener {
-                if (store.add(page, ModuleType.APP, mapOf(Module.P_APP to app.key)) != null) {
+            val onPage = store.pageOfApp(app.key)
+            if (onPage != null) {
+                items += "ホームから外す（${onPage + 1} ページ目）" to {
+                    store.removeApp(app.key)
                     rebuildHome()
-                    toast("${repo.label(app)} をホームに置きました")
-                } else {
-                    toast("このページに空いているマスがありません")
+                    fillAppSettings(s, app)
                 }
-                true
+            } else {
+                items += "ホームに追加（${page + 1} ページ目）" to {
+                    if (store.add(page, ModuleType.APP, mapOf(Module.P_APP to app.key)) != null) {
+                        rebuildHome()
+                        toast("${repo.label(app)} をホームに置きました")
+                        fillAppSettings(s, app)
+                    } else toast("このページに空いているマスがありません")
+                }
             }
         }
-        commonDrawerItems(app)
-    }.show()
+        val slots = store.home.dock
+        if (app.key !in slots) {
+            items += "下段に置く…" to {
+                s.setBody(actionList(this, slots.mapIndexed { i, key ->
+                    val now = when (key) {
+                        null -> "空き"
+                        LayoutStore.DRAWER_KEY -> "アプリ一覧のボタン"
+                        else -> repo.find(key)?.let { a -> repo.label(a) } ?: "空き"
+                    }
+                    "${i + 1} 番目（いま：$now）" to { store.setDockSlot(i, app.key); rebuildHome(); fillAppSettings(s, app) }
+                } + listOf("やめる" to { fillAppSettings(s, app) })))
+            }
+        }
+        items += "アプリを開く" to { closeSheet(); repo.launch(app, root) }
+        items += "アプリ情報・アンインストール" to { repo.openDetails(app) }
+        return items
+    }
 
     private fun iconModeLabel(app: AppEntry) = if (repo.traced(app)) "アプリのアイコンをなぞる" else "ジャンルのアイコン"
 
@@ -965,45 +1005,6 @@ class HomeActivity : Activity() {
         store.setIconTraced(app.key, traced)
         done()
         if (drawer.visibility == View.VISIBLE) drawer.rebuild()
-    }
-
-    /** アプリ一覧の長押しメニューの、どちらの画面でも出す項目（アイコン・ジャンル・下段・アプリ情報）。 */
-    private fun PopupMenu.commonDrawerItems(app: AppEntry) {
-        menu.add("アイコンの描き方（いま：${iconModeLabel(app)}）").setOnMenuItemClickListener {
-            openSheet("${repo.label(app)} のアイコン") { s ->
-                s.setTabs(emptyList(), 0) {}
-                s.setBody(iconModePicker(this@HomeActivity, repo, app) { traced -> setIconMode(app, traced) })
-            }
-            true
-        }
-        menu.add("ジャンルを変える（いま：${repo.genre(app).label}）").setOnMenuItemClickListener {
-            openSheet("${repo.label(app)} のジャンル") { s ->
-                s.setTabs(emptyList(), 0) {}
-                s.setBody(genrePicker(this@HomeActivity, store.genreOf(app.key)) { g ->
-                    store.setGenre(app.key, g)
-                    done()
-                    drawer.rebuild()
-                })
-            }
-            true
-        }
-        val slots = store.home.dock
-        if (app.key !in slots) {
-            val sub = menu.addSubMenu("下段に置く")
-            slots.forEachIndexed { i, key ->
-                val now = when (key) {
-                    null -> "空き"
-                    LayoutStore.DRAWER_KEY -> "アプリ一覧のボタン"
-                    else -> repo.find(key)?.let { a -> repo.label(a) } ?: "空き"
-                }
-                sub.add("${i + 1} 番目（$now）").setOnMenuItemClickListener {
-                    store.setDockSlot(i, app.key)
-                    rebuildHome()
-                    true
-                }
-            }
-        }
-        menu.add("アプリ情報・アンインストール").setOnMenuItemClickListener { repo.openDetails(app); true }
     }
 
     private fun versionName() =
@@ -1085,6 +1086,9 @@ class HomeActivity : Activity() {
     companion object {
         private const val REQUEST_HOME = 21
         private const val REQUEST_IMPORT = 31
+
+        /** アプリの設定のパネルに付ける目印（前後のアプリへ移るとき、同じパネルの中身だけ替える）。 */
+        private const val APP_SETTINGS = "appSettings"
     }
 
     // ------------------------------------------------------------------
