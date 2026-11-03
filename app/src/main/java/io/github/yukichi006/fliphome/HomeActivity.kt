@@ -46,6 +46,8 @@ class HomeActivity : Activity() {
     private lateinit var editBar: View
     private lateinit var leftGrid: ModuleGrid
     private lateinit var thumbRow: LinearLayout
+    private lateinit var topGrid: ModuleGrid
+    private lateinit var rightCol: RightColumn
     private var book: BookPanel? = null
 
     /** 片手の画面で、右のパネルの何枚目の布を出しているか。 */
@@ -103,9 +105,17 @@ class HomeActivity : Activity() {
         // 片手の画面：左に情報の列、右にめくれるアプリのパネル
         leftGrid = ModuleGrid(this).apply { setOnLongClickListener { enterEdit(); true } }
         wireGrid(leftGrid) { store.leftBoard() }
+        topGrid = ModuleGrid(this).apply { setOnLongClickListener { enterEdit(); true } }
+        wireGrid(topGrid) { store.topBoard(topGrid.rows) }
+        rightCol = RightColumn(this, topGrid) { rows ->
+            store.thumb = store.resized(store.thumb, rows)
+            rebuildHome()
+        }
+        // 左の 2/5 が情報の列、右の 3/5 がアプリの列（パッドの大きさが、マス目の画面の 5 列と同じくらいになる）
         thumbRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(leftGrid, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(leftGrid, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2f))
+            addView(rightCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 3f))
         }
         column.addView(thumbRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply {
             setMargins(side, dpi(4f), side, dpi(6f))
@@ -259,13 +269,16 @@ class HomeActivity : Activity() {
         val t = store.thumb
         leftGrid.configure(1, Thumb.LEFT_ROWS)
         fill(leftGrid, t.left.modules, inPatches = true)
+        fill(topGrid, t.top.modules, inPatches = true)
+        rightCol.rows = t.rows
+        rightCol.editing = editing
         bookIndex = bookIndex.coerceIn(0, t.sheets.size - 1)
         val count = t.sheets.size
         fun sheetFor(i: Int): SheetView {
             val g = ModuleGrid(this).apply { setOnLongClickListener { enterEdit(); true } }
             g.configure(Thumb.COLS, t.rows)
             // パッドが縦に伸びすぎないようにし、段が少ないときは下（親指の届く所）に寄せる
-            g.maxCellRatio = 1.15f
+            g.maxCellRatio = Thumb.CELL_RATIO
             fill(g, t.sheets[i].modules)
             if (i == bookIndex) wireGrid(g) { store.sheetBoard(bookIndex) }
             return SheetView(this, g)
@@ -275,8 +288,7 @@ class HomeActivity : Activity() {
             rebuildHome()
         }.also { b ->
             b.tag = store.bookPeel
-            book?.let { thumbRow.removeView(it) }
-            thumbRow.addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            rightCol.panel = b
             book = b
         }
         panel.setSheets(sheetFor(bookIndex), if (count > 1) sheetFor((bookIndex + 1) % count) else null, bookIndex, count)
@@ -310,7 +322,7 @@ class HomeActivity : Activity() {
                     app != null -> repo.launch(app, grid)
                     m[Module.P_LAT] == null -> {
                         enterEdit()
-                        activeBoard = if (store.thumbMode) store.leftBoard() else store.gridBoard(page)
+                        activeBoard = boardHolding(m)
                         weatherPlaceSheet(m)
                     }
                     else -> {
@@ -332,8 +344,15 @@ class HomeActivity : Activity() {
         }
     }
 
+    /** 部品 [m] が置いてある盤（片手の画面なら、左の列か右上の情報の欄）。 */
+    private fun boardHolding(m: Module): Board {
+        if (!store.thumbMode) return store.gridBoard(page)
+        val top = store.topBoard(topGrid.rows)
+        return if (top.modules().any { it.id == m.id }) top else store.leftBoard()
+    }
+
     private fun refreshModules() {
-        for (g in listOf(grid, leftGrid)) for (i in 0 until g.childCount) {
+        for (g in listOf(grid, leftGrid, topGrid)) for (i in 0 until g.childCount) {
             when (val v = g.getChildAt(i)) {
                 is AgendaView -> v.reload()
                 is BatteryPatch -> v.refresh()
@@ -503,8 +522,10 @@ class HomeActivity : Activity() {
                     true
                 }
             }
-            val rowsMenu = menu.addSubMenu("右のパネルの段の数（いま ${t.rows}）")
-            for (r in 5..11) rowsMenu.add("$r 段（${r * Thumb.COLS} 個）").setOnMenuItemClickListener { store.thumb = store.thumb.copy(rows = r); rebuildHome(); true }
+            val rowsMenu = menu.addSubMenu("アプリの枠の高さ（いま ${t.rows} 段）")
+            for (r in Thumb.MIN_ROWS..rightCol.maxRows()) rowsMenu.add("$r 段（${r * Thumb.COLS} 個）").setOnMenuItemClickListener {
+                store.thumb = store.resized(store.thumb, r); rebuildHome(); true
+            }
             val bookPeelMenu = menu.addSubMenu("パネルをめくる向き（いま：${store.bookPeel.label}）")
             for (p in PeelFrom.entries) bookPeelMenu.add(p.label).setOnMenuItemClickListener { store.bookPeel = p; rebuildHome(); true }
             menu.add("マス目の画面にする").setOnMenuItemClickListener { store.thumbMode = false; activeBoard = null; rebuildHome(); true }

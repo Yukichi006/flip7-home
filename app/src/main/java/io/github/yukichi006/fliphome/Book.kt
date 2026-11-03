@@ -11,9 +11,12 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 /**
  * アプリのパネルの布 1 枚。大きなフェルトのワッペンの中に、アプリを並べるマス目（[grid]）を入れる。
@@ -36,6 +39,147 @@ class SheetView(context: Context, val grid: ModuleGrid) : FrameLayout(context) {
     companion object {
         /** 下の帯（ページの点とめくる角）の高さ。 */
         const val STRIP_DP = 26f
+
+        /** 布の縁からマス目までの幅（左右と上）。 */
+        fun side(context: Context) = PatchPainter(context, PatchPainter.Shape.Round(24f)).contentPadding.toInt() - context.dpi(6f)
+    }
+}
+
+/**
+ * 片手の画面の右の列。下にめくれるアプリのパネル（[panel]）、その上に見るだけの情報の欄（[top]）を置く。
+ * マスの大きさは列の幅で決まり（3 列、高さは幅の [Thumb.CELL_RATIO] 倍）、パネルの高さは段の数（[rows]）で決まる。
+ * 残りの高さに入るだけの行が、上の情報の欄になる。
+ *
+ * 編集モード（[editing]）では、パネルの上の縁に「つまみ」を縫い付ける。つまみを上下にドラッグすると、
+ * パネルの段の数が変わり、離すと [onRowsChanged] に新しい段の数を渡す。
+ */
+@SuppressLint("ViewConstructor")
+class RightColumn(
+    context: Context,
+    val top: ModuleGrid,
+    private val onRowsChanged: (Int) -> Unit,
+) : ViewGroup(context) {
+    var panel: BookPanel? = null
+        set(value) {
+            if (field === value) return
+            field?.let { removeView(it) }
+            field = value
+            value?.let { addView(it) }
+        }
+
+    var rows = Thumb.DEFAULT_ROWS
+        set(value) { if (field != value) { field = value; requestLayout() } }
+
+    var editing = false
+        set(value) { field = value; invalidate() }
+
+    private val side = SheetView.side(context)
+    private val strip = context.dpi(SheetView.STRIP_DP)
+    private val gap = context.dpi(6f)
+
+    init {
+        setWillNotDraw(false)
+        addView(top)
+    }
+
+    private fun cellW(w: Int) = (w - side * 2) / Thumb.COLS.toFloat()
+    private fun cellH(w: Int) = cellW(w) * Thumb.CELL_RATIO
+    private fun panelHeight(w: Int, h: Int, r: Int) = minOf(h, (r * cellH(w)).roundToInt() + side + side + strip)
+
+    /** この画面の高さで、パネルにできるいちばん多い段の数。 */
+    fun maxRows(): Int {
+        if (width == 0) return LayoutStore.MAX_ROWS
+        return floor((height - side * 2 - strip) / cellH(width)).toInt().coerceIn(Thumb.MIN_ROWS, LayoutStore.MAX_ROWS)
+    }
+
+    /** 上の情報の欄に入る行の数。 */
+    private fun topRows(w: Int, h: Int) = floor((h - panelHeight(w, h, rows) - gap) / cellH(w)).toInt().coerceAtLeast(0)
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec)
+        val h = MeasureSpec.getSize(heightMeasureSpec)
+        setMeasuredDimension(w, h)
+        val ph = panelHeight(w, h, rows)
+        panel?.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ph, MeasureSpec.EXACTLY))
+        val tr = topRows(w, h)
+        top.configure(Thumb.COLS, tr.coerceAtLeast(1))
+        top.visibility = if (tr > 0) View.VISIBLE else View.GONE
+        top.measure(MeasureSpec.makeMeasureSpec(w - side * 2, MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec((tr * cellH(w)).roundToInt().coerceAtLeast(1), MeasureSpec.EXACTLY))
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        val w = r - l
+        val h = b - t
+        val ph = panelHeight(w, h, rows)
+        panel?.layout(0, h - ph, w, h)
+        // 情報の欄は上にそろえる（パネルの高さを変えても、上の部品の場所は動かない）
+        top.layout(side, 0, side + top.measuredWidth, top.measuredHeight)
+    }
+
+    // ---- 編集モードの、パネルの高さを変えるつまみ ----
+
+    private val tab = RectF()
+    private val tabPatch = PatchPainter(context, PatchPainter.Shape.Round(12f))
+    private val chevron = context.stitch(1.4f)
+    private val label = context.threadText(12f, bold = true).apply { textAlign = Paint.Align.CENTER }
+    private var dragging = false
+
+    private fun tabRect(): RectF {
+        val y = (panel?.top ?: height).toFloat()
+        val tw = context.dp(132f)
+        val th = context.dp(34f)
+        tab.set(width / 2f - tw / 2, y - th * 0.55f, width / 2f + tw / 2, y + th * 0.45f)
+        return tab
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        super.dispatchDraw(canvas)
+        if (!editing) return
+        val r = tabRect()
+        canvas.save()
+        canvas.translate(r.left - tabPatch.margin, r.top - tabPatch.margin)
+        tabPatch.draw(canvas, (r.width() + tabPatch.margin * 2).toInt(), (r.height() + tabPatch.margin * 2).toInt())
+        canvas.restore()
+        // 上下の矢印を縫った山形と、今の段の数
+        val cx = r.left + context.dp(22f)
+        val cy = r.centerY()
+        val a = context.dp(5f)
+        val path = Path().apply {
+            moveTo(cx - a, cy - a * 0.6f); lineTo(cx, cy - a * 1.6f); lineTo(cx + a, cy - a * 0.6f)
+            moveTo(cx - a, cy + a * 0.6f); lineTo(cx, cy + a * 1.6f); lineTo(cx + a, cy + a * 0.6f)
+        }
+        canvas.drawPath(path, chevron)
+        canvas.drawText("アプリ $rows 段", r.centerX() + context.dp(10f), cy - (label.ascent() + label.descent()) / 2, label)
+    }
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (!editing || ev.actionMasked != MotionEvent.ACTION_DOWN) return dragging
+        val r = tabRect()
+        val slack = context.dp(10f)
+        dragging = ev.x in r.left - slack..r.right + slack && ev.y in r.top - slack..r.bottom + slack
+        if (dragging) parent?.requestDisallowInterceptTouchEvent(true)
+        return dragging
+    }
+
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        if (!dragging) return false
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_MOVE -> {
+                // 指の高さから、パネルの段の数を決める（マスの高さごとに、ぴたっと止まる）
+                val r = ((height - ev.y - side * 2 - strip) / cellH(width)).roundToInt().coerceIn(Thumb.MIN_ROWS, maxRows())
+                if (r != rows) {
+                    rows = r
+                    performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    invalidate()
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                dragging = false
+                onRowsChanged(rows)
+            }
+        }
+        return true
     }
 }
 

@@ -256,9 +256,60 @@ class LayoutStore(context: Context) {
         set(value) = prefs.edit().putString("bookPeel", value.key).apply()
 
     var thumb: Thumb
-        get() = prefs.getString(KEY_THUMB, null)?.let { runCatching { Thumb.fromJson(JSONObject(it)) }.getOrNull() }
-            ?: thumbFromHome().also { thumb = it }
+        get() = prefs.getString(KEY_THUMB, null)?.let { s ->
+            runCatching {
+                val o = JSONObject(s)
+                val t = Thumb.fromJson(o)
+                // 0.11.0 の配置（右上の情報の欄がない）は、パネルを低くして、上に情報の欄を作る
+                if (o.has("top")) t else resized(t.copy(top = defaultTop()), Thumb.DEFAULT_ROWS).also { thumb = it }
+            }.getOrNull()
+        } ?: thumbFromHome().also { thumb = it }
         set(value) = prefs.edit().putString(KEY_THUMB, value.toJson().toString()).apply()
+
+    /** 右の列の上の、見るだけの情報の欄（[Thumb.COLS] 列 × [rows] 行。行の数はパネルの高さで変わる）。 */
+    fun topBoard(rows: Int) = Board(Thumb.COLS, rows, { thumb.top.modules }, { list -> thumb = thumb.copy(top = Page(list)) }, ::newId)
+
+    /** 右上の情報の欄の、最初の中身：日付と今日の予定。 */
+    private fun defaultTop() = Page(listOf(
+        Module(newId(), ModuleType.DATE, 0, 0, 3, 1, mapOf(Module.P_ALIGN to "mc")),
+        Module(newId(), ModuleType.AGENDA, 0, 1, 3, 2),
+    ))
+
+    /**
+     * アプリのパネルの段の数を [newRows] に変える。アプリは下（親指の届く側）にそろえたまま動かし、
+     * 入りきらなくなったアプリは、空いているマス（なければ新しい布）へ移す。
+     */
+    fun resized(t: Thumb, newRows: Int): Thumb {
+        val rows = newRows.coerceIn(Thumb.MIN_ROWS, LayoutStore.MAX_ROWS)
+        val d = rows - t.rows
+        val overflow = mutableListOf<Module>()
+        val sheets = t.sheets.map { p ->
+            Page(p.modules.mapNotNull { m ->
+                val r = m.row + d
+                if (r < 0 || r + m.h > rows) { overflow += m; null } else m.copy(row = r)
+            })
+        }.toMutableList()
+        for (m0 in overflow) {
+            val m = m0.copy(w = minOf(m0.w, Thumb.COLS), h = minOf(m0.h, rows))
+            var spot: Pair<Int, Pair<Int, Int>>? = null
+            while (spot == null) {
+                spot = sheets.indices.firstNotNullOfOrNull { i -> freeSpot(sheets[i], m, rows)?.let { i to it } }
+                if (spot == null) sheets += Page(emptyList())
+            }
+            val (i, at) = spot
+            sheets[i] = Page(sheets[i].modules + m.copy(col = at.first, row = at.second))
+        }
+        return t.copy(sheets = sheets, rows = rows)
+    }
+
+    /** 布 [p] の中で、[m] が入る空いた場所を、下の段から探す。 */
+    private fun freeSpot(p: Page, m: Module, rows: Int): Pair<Int, Int>? {
+        for (r in rows - m.h downTo 0) for (c in 0..Thumb.COLS - m.w) {
+            val at = m.copy(col = c, row = r)
+            if (p.modules.none { it.overlaps(at) }) return c to r
+        }
+        return null
+    }
 
     /** 左の情報の列（1 列 × [Thumb.LEFT_ROWS] 行）。 */
     fun leftBoard() = Board(1, Thumb.LEFT_ROWS, { thumb.left.modules }, { list -> thumb = thumb.copy(left = Page(list)) }, ::newId)
@@ -305,7 +356,7 @@ class LayoutStore(context: Context) {
             val skip = rows - (chunk.size + Thumb.COLS - 1) / Thumb.COLS
             Page(chunk.mapIndexed { i, m -> m.copy(id = newId(), col = i % Thumb.COLS, row = skip + i / Thumb.COLS, w = 1, h = 1) })
         }.ifEmpty { listOf(Page(emptyList())) }
-        return Thumb(Page(left), sheets, rows)
+        return Thumb(Page(left), sheets, rows, defaultTop())
     }
 
     /** アプリの名前の付け替え。付け替えていなければ null。 */
@@ -362,17 +413,22 @@ class LayoutStore(context: Context) {
 }
 
 /** 片手の画面の配置：左の情報の列（[left]）と、右のパネルの布（[sheets]、1 枚ずつめくる）。 */
-data class Thumb(val left: Page, val sheets: List<Page>, val rows: Int) {
+data class Thumb(val left: Page, val sheets: List<Page>, val rows: Int, val top: Page = Page(emptyList())) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("rows", rows)
         put("left", JSONObject().put("modules", JSONArray(left.modules.map { it.toJson() })))
+        put("top", JSONObject().put("modules", JSONArray(top.modules.map { it.toJson() })))
         put("sheets", JSONArray(sheets.map { p -> JSONObject().put("modules", JSONArray(p.modules.map { it.toJson() })) }))
     }
 
     companion object {
         const val COLS = 3
         const val LEFT_ROWS = 4
-        const val DEFAULT_ROWS = 8
+        const val DEFAULT_ROWS = 5
+        const val MIN_ROWS = 2
+
+        /** マスの高さは幅のこの倍（0.10.0 のマス目の画面のパッドと同じくらいの形）。 */
+        const val CELL_RATIO = 1.15f
 
         private fun page(o: JSONObject?): Page {
             val ms = o?.optJSONArray("modules") ?: return Page(emptyList())
@@ -382,7 +438,7 @@ data class Thumb(val left: Page, val sheets: List<Page>, val rows: Int) {
         fun fromJson(o: JSONObject): Thumb {
             val sheets = o.optJSONArray("sheets")?.let { a -> (0 until a.length()).map { page(a.getJSONObject(it)) } }.orEmpty()
             return Thumb(page(o.optJSONObject("left")), sheets.ifEmpty { listOf(Page(emptyList())) },
-                o.optInt("rows", DEFAULT_ROWS).coerceIn(LayoutStore.MIN_ROWS, LayoutStore.MAX_ROWS))
+                o.optInt("rows", DEFAULT_ROWS).coerceIn(MIN_ROWS, LayoutStore.MAX_ROWS), page(o.optJSONObject("top")))
         }
     }
 }
