@@ -595,7 +595,11 @@ class HomeActivity : Activity() {
             showBadgeSheet()
             true
         }
-        menu.add("ロック画面の壁紙を作る…").setOnMenuItemClickListener {
+        menu.add("ロック画面の動く壁紙を設定する…").setOnMenuItemClickListener {
+            openLiveWallpaper()
+            true
+        }
+        menu.add("ロック画面の壁紙（静止画）を作る…").setOnMenuItemClickListener {
             toast("ステッチの壁紙を描いています…")
             LockArt.saveAndOpen(this@HomeActivity) { err ->
                 if (err != null) toast(err)
@@ -1027,6 +1031,19 @@ class HomeActivity : Activity() {
         store.setIconTraced(app.key, traced)
         done()
         if (drawer.visibility == View.VISIBLE) drawer.rebuild()
+    }
+
+    /**
+     * 動く壁紙（刺繍の時計とカレンダー）を選ぶ画面を開く。Galaxy の画面で「ロック画面」を選んで設定してもらう。
+     * 刺繍の時計と重ならないよう、Galaxy の時計は小さい形にして上に寄せてもらう。
+     */
+    private fun openLiveWallpaper() {
+        val direct = Intent(android.app.WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
+            .putExtra(android.app.WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, android.content.ComponentName(this, StitchWallpaper::class.java))
+        val ok = runCatching { startActivity(direct) }.isSuccess ||
+            runCatching { startActivity(Intent(android.app.WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER)) }.isSuccess
+        if (ok) toast("開いた画面で「ロック画面」を選んで設定してください。Galaxy の時計は、小さい形にして上に寄せると重なりません")
+        else toast("動く壁紙の画面を開けませんでした")
     }
 
     private fun versionName() =

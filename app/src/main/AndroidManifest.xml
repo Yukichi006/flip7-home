@@ -16,6 +16,9 @@
          暗号化しない通信（http）は network_security_config で禁止している -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 動く壁紙を使える端末でなくても、インストールできるようにする -->
+    <uses-feature android:name="android.software.live_wallpaper" android:required="false" />
+
     <queries>
         <!-- ホーム画面とアプリ一覧に、インストール済みのアプリを並べる -->
         <intent>
@@ -75,6 +78,21 @@
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
+        </service>
+
+        <!-- ロック画面用の動く壁紙（刺繍のアナログ時計とカレンダー）。BIND_WALLPAPER はアプリが求める権限ではなく、
+             壁紙を動かす端末の仕組みだけがこの壁紙を呼び出せるようにするための鍵 -->
+        <service
+            android:name=".StitchWallpaper"
+            android:exported="true"
+            android:label="@string/wallpaper_name"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/stitch_wallpaper" />
         </service>
     </application>
 </manifest>
