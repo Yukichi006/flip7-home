@@ -382,7 +382,7 @@ class PadView(
         val iconPx = min(width - inner * 2, height - inner * 2 - labelH).coerceAtMost(dp(46f)).coerceAtLeast(dp(16f)).toInt()
         val total = iconPx + dp(3f) + labelH
         val top = (height - total) / 2f
-        canvas.drawBitmap(GenreIcons.bitmap(repo.genre(shown), iconPx), (width - iconPx) / 2f, top, null)
+        canvas.drawBitmap(repo.icon(shown, iconPx) { invalidate() }, (width - iconPx) / 2f, top, null)
         val text = android.text.TextUtils.ellipsize(repo.label(shown), label, width - inner * 2, android.text.TextUtils.TruncateAt.END)
         canvas.drawText(text, 0, text.length, width / 2f, top + iconPx + dp(3f) + label.textSize, label)
         val count = Badges.count(shown.component.packageName)

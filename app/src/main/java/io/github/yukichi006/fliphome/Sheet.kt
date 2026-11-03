@@ -231,7 +231,7 @@ class AppRowView(context: Context, private val repo: AppRepository) : View(conte
 
     override fun onDraw(canvas: Canvas) {
         val a = app ?: return
-        canvas.drawBitmap(GenreIcons.bitmap(repo.genre(a), iconPx), context.dp(4f), (height - iconPx) / 2f, null)
+        canvas.drawBitmap(repo.icon(a, iconPx) { invalidate() }, context.dp(4f), (height - iconPx) / 2f, null)
         val x = iconPx + context.dp(18f)
         val t = TextUtils.ellipsize(repo.label(a), label, width - x, TextUtils.TruncateAt.END)
         canvas.drawText(t, 0, t.length, x, height / 2f + label.textSize * 0.35f, label)
@@ -369,5 +369,50 @@ class AppMultiPicker(
         }, LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f))
         addView(Pill(context, "決定", selected = true).apply { setOnClickListener { onDone(picked.toList()) } },
             LayoutParams(LayoutParams.MATCH_PARENT, dpi(56f)))
+    }
+}
+
+/**
+ * アイコンの描き方を選ぶ：左は「ジャンルのアイコン」、右は「アプリのアイコンをなぞる」（アプリ本来のアイコンの形を読み取って、輪郭を縫う）。
+ * どちらも、そのアプリでの実際の絵を見せる。今の描き方は縫い目の輪で囲む。
+ */
+fun iconModePicker(context: Context, repo: AppRepository, app: AppEntry, onPick: (traced: Boolean) -> Unit): View {
+    val iconPx = context.dpi(72f)
+    val current = repo.traced(app)
+    fun tile(traced: Boolean) = object : View(context) {
+        private val title = context.threadText(14f, bold = true).apply { textAlign = Paint.Align.CENTER }
+        private val note = context.threadText(11f, color = Thread.DIM).apply { textAlign = Paint.Align.CENTER }
+        private val ring = context.stitch(1.2f)
+        private val patch = PatchPainter(context, PatchPainter.Shape.Round(18f))
+        private var bitmap: android.graphics.Bitmap? = null
+
+        init {
+            isClickable = true
+            setOnClickListener { onPick(traced) }
+            if (traced) {
+                bitmap = StitchIcons.cached(app, iconPx)
+                if (bitmap == null) StitchIcons.load(context, app, iconPx) { bitmap = it; invalidate() }
+            } else bitmap = GenreIcons.bitmap(repo.genre(app), iconPx)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            patch.draw(canvas, width, height)
+            val top = context.dp(28f)
+            val b = bitmap
+            if (b != null) canvas.drawBitmap(b, (width - iconPx) / 2f, top, null)
+            else canvas.drawText("なぞっています…", width / 2f, top + iconPx / 2f, note)
+            canvas.drawText(if (traced) "アプリのアイコンをなぞる" else "ジャンルのアイコン", width / 2f, top + iconPx + context.dp(30f), title)
+            canvas.drawText(if (traced) "アプリ本来のアイコンの形を縫う" else "いま：${repo.genre(app).label}", width / 2f, top + iconPx + context.dp(50f), note)
+            if (traced == current) {
+                val r = RectF(context.dp(12f), context.dp(12f), width - context.dp(12f), height - context.dp(12f))
+                canvas.drawRoundRect(r, context.dp(14f), context.dp(14f), ring)
+            }
+        }
+    }
+    return LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        setPadding(0, context.dpi(12f), 0, 0)
+        addView(tile(false), LinearLayout.LayoutParams(0, context.dpi(220f), 1f))
+        addView(tile(true), LinearLayout.LayoutParams(0, context.dpi(220f), 1f))
     }
 }

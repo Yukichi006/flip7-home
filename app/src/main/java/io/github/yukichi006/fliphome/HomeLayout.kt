@@ -409,6 +409,12 @@ class LayoutStore(context: Context) {
     /** アプリのアイコンとして選び直したジャンル。選んでいなければ null（自動で推し量る）。 */
     fun genreOf(key: String): Genre? = prefs.getString("genre:$key", null)?.let { runCatching { Genre.valueOf(it) }.getOrNull() }
 
+    /** アイコンを、アプリ本来のアイコンをなぞった刺繍にするか（false ならジャンルのアイコン）。 */
+    fun iconTraced(key: String): Boolean = prefs.getBoolean("trace:$key", false)
+
+    fun setIconTraced(key: String, traced: Boolean) =
+        prefs.edit().apply { if (traced) putBoolean("trace:$key", true) else remove("trace:$key") }.apply()
+
     fun setGenre(key: String, genre: Genre?) =
         prefs.edit().apply { if (genre == null) remove("genre:$key") else putString("genre:$key", genre.name) }.apply()
 

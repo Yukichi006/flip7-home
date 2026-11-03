@@ -818,7 +818,10 @@ class HomeActivity : Activity() {
                 if (drawer.visibility == View.VISIBLE) drawer.rebuild()
             })
         },
-        "ジャンル（アイコン）を変える（いま：${repo.genre(app).label}）" to {
+        "アイコンの描き方（いま：${iconModeLabel(app)}）" to {
+            s.setBody(iconModePicker(this, repo, app) { traced -> setIconMode(app, traced) })
+        },
+        "ジャンルを変える（いま：${repo.genre(app).label}）" to {
             s.setBody(genrePicker(this, store.genreOf(app.key)) { g ->
                 store.setGenre(app.key, g)
                 done()
@@ -956,9 +959,24 @@ class HomeActivity : Activity() {
         commonDrawerItems(app)
     }.show()
 
-    /** アプリ一覧の長押しメニューの、どちらの画面でも出す項目（ジャンル・下段・アプリ情報）。 */
+    private fun iconModeLabel(app: AppEntry) = if (repo.traced(app)) "アプリのアイコンをなぞる" else "ジャンルのアイコン"
+
+    private fun setIconMode(app: AppEntry, traced: Boolean) {
+        store.setIconTraced(app.key, traced)
+        done()
+        if (drawer.visibility == View.VISIBLE) drawer.rebuild()
+    }
+
+    /** アプリ一覧の長押しメニューの、どちらの画面でも出す項目（アイコン・ジャンル・下段・アプリ情報）。 */
     private fun PopupMenu.commonDrawerItems(app: AppEntry) {
-        menu.add("ジャンル（アイコン）を変える（いま：${repo.genre(app).label}）").setOnMenuItemClickListener {
+        menu.add("アイコンの描き方（いま：${iconModeLabel(app)}）").setOnMenuItemClickListener {
+            openSheet("${repo.label(app)} のアイコン") { s ->
+                s.setTabs(emptyList(), 0) {}
+                s.setBody(iconModePicker(this@HomeActivity, repo, app) { traced -> setIconMode(app, traced) })
+            }
+            true
+        }
+        menu.add("ジャンルを変える（いま：${repo.genre(app).label}）").setOnMenuItemClickListener {
             openSheet("${repo.label(app)} のジャンル") { s ->
                 s.setTabs(emptyList(), 0) {}
                 s.setBody(genrePicker(this@HomeActivity, store.genreOf(app.key)) { g ->

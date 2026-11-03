@@ -3,6 +3,7 @@ package io.github.yukichi006.fliphome
 import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
+import android.graphics.Bitmap
 import android.content.Intent
 import android.content.pm.LauncherActivityInfo
 import android.content.pm.LauncherApps
@@ -83,6 +84,20 @@ class AppRepository(private val context: Context) {
     /** アプリのアイコンにするジャンル。自分で選び直していればそれ、なければ推し量ったもの。 */
     fun genre(app: AppEntry): Genre =
         store.genreOf(app.key) ?: guessed.getOrPut(app.key) { Genre.guess(context, app) }
+
+    /**
+     * アプリのアイコン（一辺 [px]）。「アプリのアイコンをなぞる」を選んだアプリは、なぞった刺繍を返す。
+     * まだ作っている途中なら、ひとまずジャンルのアイコンを返し、できたら [onReady] を呼ぶ（描き直してもらう）。
+     */
+    fun icon(app: AppEntry, px: Int, onReady: () -> Unit): Bitmap {
+        if (store.iconTraced(app.key)) {
+            StitchIcons.cached(app, px)?.let { return it }
+            StitchIcons.load(context, app, px) { onReady() }
+        }
+        return GenreIcons.bitmap(genre(app), px)
+    }
+
+    fun traced(app: AppEntry) = store.iconTraced(app.key)
     private var byKey: Map<String, AppEntry> = emptyMap()
 
     private val callback = object : LauncherApps.Callback() {
