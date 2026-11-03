@@ -30,8 +30,8 @@ import kotlin.math.abs
  * アプリ一覧（ドロワー）。上に縫い付けたテープ風の検索欄、左にアプリの一覧、右に見出しの索引を置く。
  * 一覧のいちばん上で下へ引っ張ると閉じる。
  *
- * 検索欄のそばの切り替えで、「あいうえお順」の一覧と、「ジャンル」ごとの巾着を選べる。
- * ジャンルの巾着をタップすると、口が開いて中のアプリが出てくる（ホーム画面の巾着と同じ）。
+ * 検索欄のそばの切り替えで、「あいうえお順」の一覧と、「ジャンル」（[Shelf]）ごとの巾着を選べる。
+ * 巾着をタップすると、口が開いて中のアプリが出てくる（ホーム画面の巾着と同じ）。
  */
 @SuppressLint("ViewConstructor")
 class DrawerView(
@@ -242,23 +242,28 @@ class DrawerView(
         }
     }
 
-    /** ジャンルごとに、アプリを巾着にまとめる（ジャンルの並びは、アイコンのジャンルの順）。 */
+    /**
+     * アプリを分類（[Shelf]）ごとの巾着にまとめる。いちばん初めは「よく使う」（開いた回数の多いアプリ。ほかの巾着にも入る）。
+     */
     private fun buildPouches() {
         pouches.removeAllViews()
-        val groups = repo.apps.groupBy { repo.genre(it) }.toSortedMap(compareBy { it.ordinal })
-        for ((genre, apps) in groups) {
-            pouches.addView(FolderPouch(context, "${genre.label} ${apps.size}", apps.map { it.component.packageName },
-                onOpen = { v -> openPouch(genre, apps, v) }, onLongPress = {}, genre = genre))
+        fun add(shelf: Shelf, apps: List<AppEntry>) {
+            if (apps.isEmpty()) return
+            pouches.addView(FolderPouch(context, "${shelf.label} ${apps.size}", apps.map { it.component.packageName },
+                onOpen = { v -> openPouch(shelf.label, apps, v) }, onLongPress = {}, genre = shelf.icon))
         }
+        add(Shelf.FREQUENT, repo.frequent())
+        val groups = repo.apps.groupBy { repo.shelf(it) }.toSortedMap(compareBy { it.ordinal })
+        for ((shelf, apps) in groups) if (shelf != Shelf.FREQUENT) add(shelf, apps)
     }
 
-    private fun openPouch(genre: Genre, apps: List<AppEntry>, anchor: View) {
+    private fun openPouch(title: String, apps: List<AppEntry>, anchor: View) {
         popover?.dismiss()
         hideKeyboard()
         val pads = apps.map { app ->
             PadView(context, app, repo, framed = false) { popover?.dismiss(); onMenu(app, this) }
         }
-        popover = FolderPopover(context, genre.label, anchor, pads) { popover = null }.also { it.show(this) }
+        popover = FolderPopover(context, title, anchor, pads) { popover = null }.also { it.show(this) }
     }
 
     /** 開いている巾着を閉じる。閉じたら true。 */

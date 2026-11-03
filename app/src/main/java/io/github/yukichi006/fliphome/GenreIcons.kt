@@ -48,6 +48,8 @@ enum class Genre(val label: String, val path: String) {
     POWER("電気", "M27 6L13 27h10l-3 15 15-22H25z"),
     DOWNLOAD("ダウンロード", "M24 8v22 M15 22l9 9 9-9 M10 38h28"),
     SETTINGS("設定", "O24,24,6 M24 7v6 M24 35v6 M7 24h6 M35 24h6 M12 12l4 4 M32 32l4 4 M36 12l-4 4 M16 32l-4 4"),
+    HOME("家・家族", "M7 23L24 9l17 14 M12 19v20h24V19 M20 39V29h8v10"),
+    STAR("お気に入り", "M24 7l5 11 12 1-9 8 3 12-11-6-11 6 3-12-9-8 12-1z"),
     OTHER("その他", "M10 10h11v11H10z M27 10h11v11H27z M10 27h11v11H10z M27 27h11v11H27z"),
     ;
 

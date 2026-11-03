@@ -841,13 +841,15 @@ class HomeActivity : Activity() {
         "アイコンの描き方（いま：${iconModeLabel(app)}）" to {
             s.setBody(iconModePicker(this, repo, app) { traced -> setIconMode(app, traced) })
         },
-        "ジャンルを変える（いま：${repo.genre(app).label}）" to {
+        "アイコンの絵を変える（いま：${repo.genre(app).label}）" to {
             s.setBody(genrePicker(this, store.genreOf(app.key)) { g ->
                 store.setGenre(app.key, g)
+                repo.forgetGuesses(app)
                 done()
                 if (drawer.visibility == View.VISIBLE) drawer.rebuild()
             })
         },
+        "ジャンル（アプリ一覧の巾着）など、まとめて設定（いま：${repo.shelf(app).label}）" to { showAppSettings(app) },
         "アプリ情報・アンインストール" to { repo.openDetails(app) },
     )
 

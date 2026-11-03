@@ -67,6 +67,8 @@ object Index {
 /**
  * インストール済みのアプリの一覧を読み、追加・削除・更新があれば知らせる。
  */
+private const val MAX_FREQUENT = 12
+
 class AppRepository(private val context: Context) {
     private val launcherApps = context.getSystemService(LauncherApps::class.java)!!
     private val userManager = context.getSystemService(UserManager::class.java)!!
@@ -98,6 +100,33 @@ class AppRepository(private val context: Context) {
     }
 
     fun traced(app: AppEntry) = store.iconTraced(app.key)
+
+    private val guessedShelf = mutableMapOf<String, Shelf>()
+
+    /** アプリ一覧の巾着の分類。自分で選んでいればそれ、なければ推し量ったもの。 */
+    fun shelf(app: AppEntry): Shelf = store.shelfOf(app.key) ?: guessedShelf.getOrPut(app.key) { Shelf.guess(app, genre(app)) }
+
+    /** 分類を推し量り直す（ジャンルを変えたときなど）。 */
+    fun forgetGuesses(app: AppEntry) {
+        guessedShelf.remove(app.key)
+    }
+
+    /**
+     * 「よく使う」の巾着に入れるアプリ（いちばん多くて 12 個）。自分で「よく使う」に入れたアプリと、FlipHome から開いた回数の多いアプリ。
+     * まだあまり開いていないうちは、ホーム画面と下段に置いたアプリで埋める。
+     */
+    fun frequent(): List<AppEntry> {
+        val pinned = apps.filter { store.shelfOf(it.key) == Shelf.FREQUENT }
+        val used = apps.filter { store.launches(it.key) >= 2 && it !in pinned }.sortedByDescending { store.launches(it.key) }
+        val list = (pinned + used).toMutableList()
+        if (list.size < MAX_FREQUENT && apps.sumOf { store.launches(it.key) } < 30) {
+            val home = store.home
+            val placed = (home.dock.filterNotNull() + store.thumb.sheets.firstOrNull()?.modules.orEmpty().mapNotNull { it[Module.P_APP] } +
+                home.pages.firstOrNull()?.modules.orEmpty().mapNotNull { it[Module.P_APP] })
+            for (key in placed) if (list.size < MAX_FREQUENT) find(key)?.let { if (it !in list) list += it }
+        }
+        return list.take(MAX_FREQUENT)
+    }
     private var byKey: Map<String, AppEntry> = emptyMap()
 
     private val callback = object : LauncherApps.Callback() {
@@ -172,6 +201,7 @@ class AppRepository(private val context: Context) {
         }
         val options = from?.let { ActivityOptions.makeClipRevealAnimation(it, 0, 0, it.width, it.height).toBundle() }
         runCatching { launcherApps.startMainActivity(app.component, app.user, bounds, options) }
+            .onSuccess { store.countLaunch(app.key) }
             .onFailure { Toast.makeText(context, "${app.label} を開けませんでした", Toast.LENGTH_SHORT).show() }
     }
 

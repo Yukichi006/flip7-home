@@ -18,9 +18,10 @@ import android.widget.TextView
 
 /**
  * アプリ 1 つの設定を、1 枚にまとめたもの（アプリ一覧でアプリを長押ししたときに出す）。
- * 上から：アプリのアイコンと名前・前後のアプリへ移るボタン、名前、アイコンの描き方、ジャンル、置き場所などのボタン。
+ * 上から：アプリのアイコンと名前・前後のアプリへ移るボタン、名前、ジャンル（アプリ一覧の巾着）、アイコンの描き方、
+ * アイコンの絵、置き場所などのボタン。
  *
- * 名前・アイコンの描き方・ジャンルは、押したらすぐに変わり、パネルは閉じない（続けてほかの設定もできる）。
+ * 名前・ジャンル・アイコンは、押したらすぐに変わり、パネルは閉じない（続けてほかの設定もできる）。
  * 「前のアプリ」「次のアプリ」で、あいうえお順に隣のアプリの設定へ移れるので、ジャンルの振り分けを続けてできる。
  */
 @SuppressLint("ViewConstructor")
@@ -55,10 +56,16 @@ class AppSettingsView(
         navRow()
         section("名前")
         nameRow()
+        section("ジャンル（アプリ一覧の巾着）")
+        val shelf = store.shelfOf(app.key)
+        grid(listOf(Choice("おまかせ", null, shelf == null) { store.setShelf(app.key, null) }) +
+            Shelf.entries.map { sh -> Choice(sh.label, sh.icon, shelf == sh) { store.setShelf(app.key, sh) } })
         section("アイコンの描き方")
         iconRow()
-        section("ジャンル（アイコンと、アプリ一覧の巾着の振り分け）")
-        column.addView(GenreGrid(), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        section("アイコンの絵")
+        val genre = store.genreOf(app.key)
+        grid(listOf(Choice("おまかせ", null, genre == null) { store.setGenre(app.key, null) }) +
+            Genre.entries.map { g -> Choice(g.label, g, genre == g) { store.setGenre(app.key, g) } }, small = true)
         section("置き場所など")
         for ((label, act) in actions()) {
             column.addView(Pill(context, label).apply { setOnClickListener { act() } },
@@ -160,26 +167,31 @@ class AppSettingsView(
             val tx = x0 + iconPx + context.dp(14f)
             val t = TextUtils.ellipsize(repo.label(app), name, width - tx - x0, TextUtils.TruncateAt.END)
             canvas.drawText(t, 0, t.length, tx, height / 2f - context.dp(2f), name)
-            val g = repo.genre(app).label + if (store.genreOf(app.key) == null) "（おまかせ）" else ""
+            val g = repo.shelf(app).label + if (store.shelfOf(app.key) == null) "（おまかせ）" else ""
             canvas.drawText("ジャンル：$g", tx, height / 2f + sub.textSize + context.dp(4f), sub)
         }
     }
 
-    /** ジャンルのマス目（4 列）。いちばん上の「おまかせ」は、アプリから推し量ったものに戻す。押したらすぐに変わる。 */
-    private inner class GenreGrid : ViewGroup(context) {
-        private val items: List<Genre?> = listOf<Genre?>(null) + Genre.entries
-        private val current = store.genreOf(app.key)
+    /** 選べるもの 1 つ（名前・絵・今選んでいるか・押したとき）。 */
+    private class Choice(val label: String, val icon: Genre?, val selected: Boolean, val pick: () -> Unit)
+
+    private fun grid(items: List<Choice>, small: Boolean = false) {
+        column.addView(ChoiceGrid(items, small), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+    }
+
+    /** 選べるもののマス目（4 列）。いちばん上の「おまかせ」は、アプリから推し量ったものに戻す。押したらすぐに変わる。 */
+    private inner class ChoiceGrid(items: List<Choice>, small: Boolean) : ViewGroup(context) {
+        private val tileH = context.dpi(if (small) 74f else 80f)
 
         init {
-            for (g in items) addView(Tile(g))
+            for (c in items) addView(Tile(c, small))
         }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val w = MeasureSpec.getSize(widthMeasureSpec)
             val cw = w / COLS
-            val ch = context.dpi(80f)
-            for (i in 0 until childCount) getChildAt(i).measure(MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY))
-            setMeasuredDimension(w, ch * ((childCount + COLS - 1) / COLS))
+            for (i in 0 until childCount) getChildAt(i).measure(MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(tileH, MeasureSpec.EXACTLY))
+            setMeasuredDimension(w, tileH * ((childCount + COLS - 1) / COLS))
         }
 
         override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
@@ -191,18 +203,19 @@ class AppSettingsView(
             }
         }
 
-        private inner class Tile(private val g: Genre?) : View(context) {
-            private val text = context.threadText(10.5f).apply { textAlign = Paint.Align.CENTER }
+        private inner class Tile(private val c: Choice, small: Boolean) : View(context) {
+            private val text = context.threadText(if (small) 10f else 10.5f).apply { textAlign = Paint.Align.CENTER }
             private val auto = context.threadText(14f).apply { textAlign = Paint.Align.CENTER }
             private val ring = context.stitch(1.2f)
-            private val iconPx = context.dpi(34f)
+            private val iconPx = context.dpi(if (small) 30f else 34f)
 
             init {
                 isClickable = true
-                contentDescription = g?.label ?: "おまかせ"
+                contentDescription = c.label
                 setOnClickListener {
-                    if (g != current) {
-                        store.setGenre(app.key, g)
+                    if (!c.selected) {
+                        c.pick()
+                        repo.forgetGuesses(app)
                         changed()
                     }
                 }
@@ -210,12 +223,12 @@ class AppSettingsView(
 
             override fun onDraw(canvas: Canvas) {
                 val top = context.dp(8f)
+                val g = c.icon
                 if (g != null) canvas.drawBitmap(GenreIcons.bitmap(g, iconPx), (width - iconPx) / 2f, top, null)
                 else canvas.drawText("自動", width / 2f, top + iconPx * 0.62f, auto)
-                val label = g?.label ?: "おまかせ"
-                val t = TextUtils.ellipsize(label, text, width - context.dp(6f), TextUtils.TruncateAt.END)
+                val t = TextUtils.ellipsize(c.label, text, width - context.dp(6f), TextUtils.TruncateAt.END)
                 canvas.drawText(t, 0, t.length, width / 2f, top + iconPx + context.dp(18f), text)
-                if (g == current) {
+                if (c.selected) {
                     val r = RectF(context.dp(3f), context.dp(2f), width - context.dp(3f), height - context.dp(2f))
                     canvas.drawRoundRect(r, context.dp(14f), context.dp(14f), ring)
                 }

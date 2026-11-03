@@ -412,6 +412,17 @@ class LayoutStore(context: Context) {
     /** アプリのアイコンとして選び直したジャンル。選んでいなければ null（自動で推し量る）。 */
     fun genreOf(key: String): Genre? = prefs.getString("genre:$key", null)?.let { runCatching { Genre.valueOf(it) }.getOrNull() }
 
+    /** アプリ一覧の巾着の分類（自分で選んでいなければ null）。 */
+    fun shelfOf(key: String): Shelf? = prefs.getString("shelf:$key", null)?.let { runCatching { Shelf.valueOf(it) }.getOrNull() }
+
+    fun setShelf(key: String, shelf: Shelf?) =
+        prefs.edit().apply { if (shelf == null) remove("shelf:$key") else putString("shelf:$key", shelf.name) }.apply()
+
+    /** FlipHome から開いた回数（「よく使う」の巾着に使う。端末の外には出さない）。 */
+    fun launches(key: String): Int = prefs.getInt("use:$key", 0)
+
+    fun countLaunch(key: String) = prefs.edit().putInt("use:$key", launches(key) + 1).apply()
+
     /** アイコンを、アプリ本来のアイコンをなぞった刺繍にするか（false ならジャンルのアイコン）。 */
     fun iconTraced(key: String): Boolean = prefs.getBoolean("trace:$key", false)
 
