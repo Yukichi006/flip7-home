@@ -14,7 +14,6 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import kotlin.math.abs
-import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -46,17 +45,17 @@ class SheetView(context: Context, val grid: ModuleGrid) : FrameLayout(context) {
 }
 
 /**
- * 片手の画面の右の列。下にめくれるアプリのパネル（[panel]）、その上に見るだけの情報の欄（[top]）を置く。
- * マスの大きさは列の幅で決まり（3 列、高さは幅の [Thumb.CELL_RATIO] 倍）、パネルの高さは段の数（[rows]）で決まる。
- * 残りの高さに入るだけの行が、上の情報の欄になる。
+ * 片手の画面の全体。画面全体に情報のマス目（[grid]、[Thumb.INFO_COLS] 列）を敷き、その右下 [Thumb.COLS] 列 × [rows] 行に、
+ * めくれるアプリのパネル（[panel]）を重ねる。マスの大きさは幅で決まり（高さは幅の [Thumb.CELL_RATIO] 倍くらい）、
+ * 行の数は画面の高さから決まる。パネルの上と左の空いたマスには、左右をまたいで部品を置ける。
  *
  * 編集モード（[editing]）では、パネルの上の縁に「つまみ」を縫い付ける。つまみを上下にドラッグすると、
  * パネルの段の数が変わり、離すと [onRowsChanged] に新しい段の数を渡す。
  */
 @SuppressLint("ViewConstructor")
-class RightColumn(
+class ThumbArea(
     context: Context,
-    val top: ModuleGrid,
+    val grid: ModuleGrid,
     private val onRowsChanged: (Int) -> Unit,
 ) : ViewGroup(context) {
     var panel: BookPanel? = null
@@ -73,48 +72,40 @@ class RightColumn(
     var editing = false
         set(value) { field = value; invalidate() }
 
-    private val side = SheetView.side(context)
-    private val strip = context.dpi(SheetView.STRIP_DP)
-    private val gap = context.dpi(6f)
-
     init {
         setWillNotDraw(false)
-        addView(top)
+        grid.autoRowsRatio = Thumb.CELL_RATIO
+        grid.reservedCols = Thumb.COLS
+        addView(grid)
     }
 
-    private fun cellW(w: Int) = (w - side * 2) / Thumb.COLS.toFloat()
-    private fun cellH(w: Int) = cellW(w) * Thumb.CELL_RATIO
-    private fun panelHeight(w: Int, h: Int, r: Int) = minOf(h, (r * cellH(w)).roundToInt() + side + side + strip)
+    private fun cellW() = width / Thumb.INFO_COLS.toFloat()
+    private fun cellH() = height / grid.rows.coerceAtLeast(1).toFloat()
 
-    /** この画面の高さで、パネルにできるいちばん多い段の数。 */
-    fun maxRows(): Int {
-        if (width == 0) return LayoutStore.MAX_ROWS
-        return floor((height - side * 2 - strip) / cellH(width)).toInt().coerceIn(Thumb.MIN_ROWS, LayoutStore.MAX_ROWS)
-    }
+    /** パネルにできるいちばん多い段の数（上の部品にぶつかるところまで。部品を隠さない）。 */
+    fun maxRows(): Int = maxOf(rows, grid.freeRowsAtBottomRight(Thumb.COLS)).coerceIn(Thumb.MIN_ROWS, minOf(grid.rows, LayoutStore.MAX_ROWS).coerceAtLeast(Thumb.MIN_ROWS))
 
-    /** 上の情報の欄に入る行の数。 */
-    private fun topRows(w: Int, h: Int) = floor((h - panelHeight(w, h, rows) - gap) / cellH(w)).toInt().coerceAtLeast(0)
+    private fun shownRows() = rows.coerceIn(1, grid.rows.coerceAtLeast(1))
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val h = MeasureSpec.getSize(heightMeasureSpec)
         setMeasuredDimension(w, h)
-        val ph = panelHeight(w, h, rows)
-        panel?.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ph, MeasureSpec.EXACTLY))
-        val tr = topRows(w, h)
-        top.configure(Thumb.COLS, tr.coerceAtLeast(1))
-        top.visibility = if (tr > 0) View.VISIBLE else View.GONE
-        top.measure(MeasureSpec.makeMeasureSpec(w - side * 2, MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec((tr * cellH(w)).roundToInt().coerceAtLeast(1), MeasureSpec.EXACTLY))
+        // 情報のマス目が、高さから行の数を決める
+        grid.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
+        val r = shownRows()
+        grid.reservedRows = r
+        val cw = w / Thumb.INFO_COLS.toFloat()
+        val ch = h / grid.rows.coerceAtLeast(1).toFloat()
+        panel?.measure(MeasureSpec.makeMeasureSpec((cw * Thumb.COLS).roundToInt(), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec((ch * r).roundToInt(), MeasureSpec.EXACTLY))
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val w = r - l
         val h = b - t
-        val ph = panelHeight(w, h, rows)
-        panel?.layout(0, h - ph, w, h)
-        // 情報の欄は上にそろえる（パネルの高さを変えても、上の部品の場所は動かない）
-        top.layout(side, 0, side + top.measuredWidth, top.measuredHeight)
+        grid.layout(0, 0, w, h)
+        panel?.let { p -> p.layout(w - p.measuredWidth, h - p.measuredHeight, w, h) }
     }
 
     // ---- 編集モードの、パネルの高さを変えるつまみ ----
@@ -129,7 +120,8 @@ class RightColumn(
         val y = (panel?.top ?: height).toFloat()
         val tw = context.dp(132f)
         val th = context.dp(34f)
-        tab.set(width / 2f - tw / 2, y - th * 0.55f, width / 2f + tw / 2, y + th * 0.45f)
+        val cx = (panel?.let { (it.left + it.right) / 2f } ?: (width / 2f))
+        tab.set(cx - tw / 2, y - th * 0.55f, cx + tw / 2, y + th * 0.45f)
         return tab
     }
 
@@ -167,7 +159,7 @@ class RightColumn(
         when (ev.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
                 // 指の高さから、パネルの段の数を決める（マスの高さごとに、ぴたっと止まる）
-                val r = ((height - ev.y - side * 2 - strip) / cellH(width)).roundToInt().coerceIn(Thumb.MIN_ROWS, maxRows())
+                val r = ((height - ev.y) / cellH()).roundToInt().coerceIn(Thumb.MIN_ROWS, maxRows())
                 if (r != rows) {
                     rows = r
                     performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)

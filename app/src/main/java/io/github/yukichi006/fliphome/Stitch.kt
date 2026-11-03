@@ -22,6 +22,9 @@ object Thread {
     const val DIM = 0x8CEFEBE2.toInt()
     const val FAINT = 0x30EFEBE2.toInt()
 
+    /** 通知の印の糸（あたたかいオレンジ）。 */
+    const val ALERT = 0xFFF5A31C.toInt()
+
     /** 糸の下に落ちる影。糸が布から浮いて見えるようにする。 */
     const val SHADOW = 0xF2000000.toInt()
 }

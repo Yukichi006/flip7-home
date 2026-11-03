@@ -293,7 +293,7 @@ class PadView(
 
     override fun onDraw(canvas: Canvas) {
         val alpha = Sewing.contentAlpha()
-        patch.zigzag = Badges.count(app.component.packageName) > 0
+        patch.alert = Badges.count(app.component.packageName) > 0
         if (!canPeel()) {
             if (framed) patch.draw(canvas, width, height)
             withAlpha(canvas, alpha) { drawFace(canvas, app, withBadge = true) }

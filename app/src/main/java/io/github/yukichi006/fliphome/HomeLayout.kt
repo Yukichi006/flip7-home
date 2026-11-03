@@ -32,6 +32,7 @@ enum class ModuleType(val label: String, val note: String, val w: Int, val h: In
     TITLE("見出し", "ページの名前など", 3, 1, true),
     MEDIA("再生中の曲", "曲名と再生ボタン", 3, 1, true),
     WEATHER("天気", "天気と 13 目盛りの温度計（地点を選ぶ）", 1, 3, true),
+    ANALOG("アナログ時計", "カバー画面と同じ、刺繍の文字盤の時計", 2, 2, true),
 }
 
 /**
@@ -260,20 +261,39 @@ class LayoutStore(context: Context) {
             runCatching {
                 val o = JSONObject(s)
                 val t = Thumb.fromJson(o)
-                // 0.11.0 の配置（右上の情報の欄がない）は、パネルを低くして、上に情報の欄を作る
-                var u = if (o.has("top")) t else resized(t.copy(top = defaultTop()), Thumb.DEFAULT_ROWS)
-                // 0.12.0 までの左の列（1 列）は、2 列のマス目に移す
-                if (!o.has("leftCols")) u = u.copy(left = leftOnGrid(u.left))
-                if (u !== t) thumb = u
-                u
+                if (o.has("info")) t else fromLegacy(o, t).also { thumb = it }
             }.getOrNull()
         } ?: thumbFromHome().also { thumb = it }
         set(value) = prefs.edit().putString(KEY_THUMB, value.toJson().toString()).apply()
 
-    /** 右の列の上の、見るだけの情報の欄（[Thumb.COLS] 列 × [rows] 行。行の数はパネルの高さで変わる）。 */
-    fun topBoard(rows: Int) = Board(Thumb.COLS, rows, { thumb.top.modules }, { list -> thumb = thumb.copy(top = Page(list)) }, ::newId)
+    /**
+     * 0.13.0 までの配置（左の列と右上の情報の欄が別々）を、画面全体で 1 つのマス目に移す。
+     * 左の列の部品は左の 2 列に、右上の欄の部品は右の 3 列に、そのままの行で置く。
+     */
+    private fun fromLegacy(o: JSONObject, t: Thumb): Thumb {
+        var left = Thumb.page(o.optJSONObject("left"))
+        var top = Thumb.page(o.optJSONObject("top"))
+        var u = t
+        // 0.11.0 の配置（右上の情報の欄がない）は、パネルを低くして、上に情報を置く
+        if (!o.has("top")) { u = resized(t, Thumb.DEFAULT_ROWS); top = defaultTop() }
+        // 0.12.0 までの左の列（1 列）は、2 列に 2×2 ずつ積み直す
+        if (!o.has("leftCols")) left = leftOnGrid(left)
+        return u.copy(info = withTop(left, top))
+    }
 
-    /** 右上の情報の欄の、最初の中身：日付と今日の予定。 */
+    private fun withTop(left: Page, top: Page) = Page(left.modules + top.modules.map { it.copy(col = it.col + Thumb.INFO_COLS - Thumb.COLS) })
+
+    /**
+     * 片手の画面の、情報のマス目（[Thumb.INFO_COLS] 列 × [rows] 行。行の数は画面の高さで決まる）。
+     * 右下のアプリのパネルの場所には、部品を置けない。
+     */
+    fun infoBoard(rows: Int): Board {
+        val t = thumb
+        val panel = android.graphics.Rect(Thumb.INFO_COLS - Thumb.COLS, rows - t.rows, Thumb.INFO_COLS, rows)
+        return Board(Thumb.INFO_COLS, rows, { thumb.info.modules }, { list -> thumb = thumb.copy(info = Page(list)) }, ::newId, panel)
+    }
+
+    /** 右上の、最初の中身：日付と今日の予定（右の 3 列の中での場所）。 */
     private fun defaultTop() = Page(listOf(
         Module(newId(), ModuleType.DATE, 0, 0, 3, 1, mapOf(Module.P_ALIGN to "mc")),
         Module(newId(), ModuleType.AGENDA, 0, 1, 3, 2),
@@ -315,12 +335,9 @@ class LayoutStore(context: Context) {
         return null
     }
 
-    /** 左の情報の列（[Thumb.LEFT_COLS] 列 × [rows] 行。行の数は画面の高さで決まる）。 */
-    fun leftBoard(rows: Int) = Board(Thumb.LEFT_COLS, rows, { thumb.left.modules }, { list -> thumb = thumb.copy(left = Page(list)) }, ::newId)
-
-    /** 左の列の部品を、2 列のマス目に 2×2 ずつ上から積み直す（0.12.0 までの 1 列の配置から移すとき）。 */
+    /** 左の列の部品を、2 列に 2×2 ずつ上から積み直す（0.12.0 までの 1 列の配置から移すとき）。 */
     private fun leftOnGrid(left: Page) = Page(left.modules.sortedBy { it.row }.mapIndexed { i, m ->
-        m.copy(col = 0, row = i * 2, w = Thumb.LEFT_COLS, h = 2)
+        m.copy(col = 0, row = i * 2, w = 2, h = 2)
     })
 
     /** 右のパネルの [index] 枚目の布（[Thumb.COLS] 列 × 行）。 */
@@ -365,7 +382,7 @@ class LayoutStore(context: Context) {
             val skip = rows - (chunk.size + Thumb.COLS - 1) / Thumb.COLS
             Page(chunk.mapIndexed { i, m -> m.copy(id = newId(), col = i % Thumb.COLS, row = skip + i / Thumb.COLS, w = 1, h = 1) })
         }.ifEmpty { listOf(Page(emptyList())) }
-        return Thumb(Page(left), sheets, rows, defaultTop())
+        return Thumb(withTop(Page(left), defaultTop()), sheets, rows)
     }
 
     /** アプリの名前の付け替え。付け替えていなければ null。 */
@@ -421,34 +438,35 @@ class LayoutStore(context: Context) {
     }
 }
 
-/** 片手の画面の配置：左の情報の列（[left]）と、右のパネルの布（[sheets]、1 枚ずつめくる）。 */
-data class Thumb(val left: Page, val sheets: List<Page>, val rows: Int, val top: Page = Page(emptyList())) {
+/**
+ * 片手の画面の配置：画面全体の情報のマス目（[info]、[INFO_COLS] 列）と、その右下に重ねるアプリのパネルの布
+ * （[sheets]、1 枚ずつめくる。[COLS] 列 × [rows] 段。パネルは情報のマス目の右下 [COLS] 列 × [rows] 行を占める）。
+ */
+data class Thumb(val info: Page, val sheets: List<Page>, val rows: Int) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("rows", rows)
-        put("leftCols", LEFT_COLS)
-        put("left", JSONObject().put("modules", JSONArray(left.modules.map { it.toJson() })))
-        put("top", JSONObject().put("modules", JSONArray(top.modules.map { it.toJson() })))
+        put("info", JSONObject().put("modules", JSONArray(info.modules.map { it.toJson() })))
         put("sheets", JSONArray(sheets.map { p -> JSONObject().put("modules", JSONArray(p.modules.map { it.toJson() })) }))
     }
 
     companion object {
         const val COLS = 3
-        const val LEFT_COLS = 2
+        const val INFO_COLS = 5
         const val DEFAULT_ROWS = 5
         const val MIN_ROWS = 2
 
         /** マスの高さは幅のこの倍（0.10.0 のマス目の画面のパッドと同じくらいの形）。 */
         const val CELL_RATIO = 1.15f
 
-        private fun page(o: JSONObject?): Page {
+        fun page(o: JSONObject?): Page {
             val ms = o?.optJSONArray("modules") ?: return Page(emptyList())
             return Page((0 until ms.length()).mapNotNull { Module.fromJson(ms.getJSONObject(it)) })
         }
 
         fun fromJson(o: JSONObject): Thumb {
             val sheets = o.optJSONArray("sheets")?.let { a -> (0 until a.length()).map { page(a.getJSONObject(it)) } }.orEmpty()
-            return Thumb(page(o.optJSONObject("left")), sheets.ifEmpty { listOf(Page(emptyList())) },
-                o.optInt("rows", DEFAULT_ROWS).coerceIn(MIN_ROWS, LayoutStore.MAX_ROWS), page(o.optJSONObject("top")))
+            return Thumb(page(o.optJSONObject("info")), sheets.ifEmpty { listOf(Page(emptyList())) },
+                o.optInt("rows", DEFAULT_ROWS).coerceIn(MIN_ROWS, LayoutStore.MAX_ROWS))
         }
     }
 }
@@ -463,11 +481,14 @@ class Board(
     private val read: () -> List<Module>,
     private val write: (List<Module>) -> Unit,
     private val newId: () -> Long,
+    /** 部品を置けない場所（マスの単位。片手の画面のアプリのパネル）。 */
+    private val reserved: android.graphics.Rect? = null,
 ) {
     fun modules(): List<Module> = read()
 
     private fun fits(list: List<Module>, m: Module) =
-        m.col >= 0 && m.row >= 0 && m.col + m.w <= cols && m.row + m.h <= rows && list.none { it.id != m.id && it.overlaps(m) }
+        m.col >= 0 && m.row >= 0 && m.col + m.w <= cols && m.row + m.h <= rows && list.none { it.id != m.id && it.overlaps(m) } &&
+            reserved?.let { r -> m.col < r.right && r.left < m.col + m.w && m.row < r.bottom && r.top < m.row + m.h } != true
 
     /** [type] の部品を [col], [row] に置く。最初の大きさが入らなければ、入るところまで小さくする。 */
     fun placeAt(type: ModuleType, col: Int, row: Int, props: Map<String, String> = emptyMap()): Module? {
@@ -534,6 +555,28 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
     private val badge = BadgePainter(context)
     private val rect = RectF()
 
+    /** 右下の、部品を置けない場所（片手の画面のアプリのパネル）。[reservedCols] 列 × [reservedRows] 行。 */
+    var reservedCols = 0
+        set(value) { if (field != value) { field = value; requestLayout(); invalidate() } }
+    var reservedRows = 0
+        set(value) { if (field != value) { field = value; requestLayout(); invalidate() } }
+
+    private fun isReserved(c: Int, r: Int) = c >= cols - reservedCols && r >= rows - reservedRows && reservedCols > 0 && reservedRows > 0
+    private fun inReserved(m: Module) =
+        reservedCols > 0 && reservedRows > 0 && m.col + m.w > cols - reservedCols && m.row + m.h > rows - reservedRows
+
+    /** 右の [n] 列で、下から何行ぶん部品がないか（片手の画面のパネルを、部品にぶつかるまで広げられるように）。 */
+    fun freeRowsAtBottomRight(n: Int): Int {
+        val list = (0 until childCount).map { (getChildAt(it).layoutParams as Params).module }
+        var free = 0
+        while (free < rows) {
+            val y = rows - 1 - free
+            if (list.any { m -> m.col + m.w > cols - n && m.row <= y && y < m.row + m.h }) break
+            free++
+        }
+        return free
+    }
+
     /** 0 より大きいと、行の数を入れ物の高さから決める（マスの高さが幅のこの倍くらいになるだけ）。 */
     var autoRowsRatio = 0f
         set(value) { field = value; requestLayout() }
@@ -572,7 +615,7 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
         setMeasuredDimension(w, h)
     }
 
-    private fun inside(m: Module) = m.row + m.h <= rows && m.col + m.w <= cols
+    private fun inside(m: Module) = m.row + m.h <= rows && m.col + m.w <= cols && !inReserved(m)
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
         val cw = cellW()
@@ -608,7 +651,7 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
             // 空いているマスに、チャコペンの縫い線を引く
             val list = moduleViews().map { it.second }
             for (r in 0 until rows) for (c in 0 until cols) {
-                if (list.any { it.covers(c, r) }) continue
+                if (isReserved(c, r) || list.any { it.covers(c, r) }) continue
                 cellRect(c, r, 1, 1, rect)
                 canvas.drawRoundRect(rect, context.dp(12f), context.dp(12f), chalk)
             }
@@ -655,7 +698,7 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
     private fun cellAt(x: Float, y: Float): Pair<Int, Int>? {
         val c = (x / cellW()).toInt()
         val r = ((y - gridTop()) / cellH()).toInt()
-        return if (c in 0 until cols && r in 0 until rows && x >= 0 && y >= gridTop()) c to r else null
+        return if (c in 0 until cols && r in 0 until rows && x >= 0 && y >= gridTop() && !isReserved(c, r)) c to r else null
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -707,7 +750,7 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
                     }
                     if (target != preview) {
                         previewOk = all.none { it.id != m.id && it.overlaps(target) } &&
-                            target.col >= 0 && target.row >= 0 && target.col + target.w <= cols && target.row + target.h <= rows
+                            target.col >= 0 && target.row >= 0 && target.col + target.w <= cols && target.row + target.h <= rows && !inReserved(target)
                         if (preview != null && previewOk) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                         preview = target
                     }
