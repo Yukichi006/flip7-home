@@ -288,6 +288,31 @@ class PadView(
         }
     }
 
+    /**
+     * アプリ名を、省略せずに入るように整える。まず文字を小さくして 1 行に入れ、入らなければ 2 行に分ける
+     * （英語は空白の所で分ける）。それでも入らないときだけ、2 行目の終わりを「…」にする。文字の大きさは [label] に入れる。
+     */
+    private fun fitLabel(text: String, maxW: Float): List<CharSequence> {
+        val big = context.sp(9.5f)
+        val small = context.sp(7.5f)
+        var size = big
+        label.textSize = size
+        while (label.measureText(text) > maxW && size > small) {
+            size -= context.sp(0.5f)
+            label.textSize = size
+        }
+        if (label.measureText(text) <= maxW) return listOf(text)
+        label.textSize = small
+        var cut = label.breakText(text, true, maxW, null).coerceAtLeast(1)
+        // 空白があれば、そこで分ける
+        val space = text.lastIndexOf(' ', cut)
+        if (space > 0 && cut < text.length) cut = space
+        val first = text.substring(0, cut).trimEnd()
+        val rest = text.substring(cut).trimStart()
+        val second = android.text.TextUtils.ellipsize(rest, label, maxW, android.text.TextUtils.TruncateAt.END)
+        return listOf(first, second)
+    }
+
     /** 待機中に少しだけめくれている深さ（角は犬の耳、辺は細い折り返し）。 */
     private fun restDepth() = if (peel.corner) dp(18f) else dp(7f)
 
@@ -377,14 +402,17 @@ class PadView(
 
     /** アイコンとアプリ名（と通知の印）を描く。 */
     private fun drawFace(canvas: Canvas, shown: AppEntry, withBadge: Boolean) {
-        val inner = if (framed) patch.margin + dp(9f) else dp(2f)
-        val labelH = label.textSize * 1.3f
-        val iconPx = min(width - inner * 2, height - inner * 2 - labelH).coerceAtMost(dp(46f)).coerceAtLeast(dp(16f)).toInt()
+        val inner = if (framed) patch.margin + dp(7f) else dp(2f)
+        val lines = fitLabel(repo.label(shown), width - inner * 2)
+        val lineH = label.textSize * 1.15f
+        val labelH = lineH * lines.size + label.textSize * 0.15f
+        val iconPx = min(width - inner * 2, height - inner * 2 - labelH - dp(3f)).coerceAtMost(dp(46f)).coerceAtLeast(dp(14f)).toInt()
         val total = iconPx + dp(3f) + labelH
         val top = (height - total) / 2f
         canvas.drawBitmap(repo.icon(shown, iconPx) { invalidate() }, (width - iconPx) / 2f, top, null)
-        val text = android.text.TextUtils.ellipsize(repo.label(shown), label, width - inner * 2, android.text.TextUtils.TruncateAt.END)
-        canvas.drawText(text, 0, text.length, width / 2f, top + iconPx + dp(3f) + label.textSize, label)
+        lines.forEachIndexed { i, t ->
+            canvas.drawText(t, 0, t.length, width / 2f, top + iconPx + dp(3f) + label.textSize + lineH * i, label)
+        }
         val count = Badges.count(shown.component.packageName)
         if (withBadge && count > 0) {
             // 右上の角に、件数を刺繍したタグを吊るす

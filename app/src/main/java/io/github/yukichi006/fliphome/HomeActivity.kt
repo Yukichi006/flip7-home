@@ -337,14 +337,34 @@ class HomeActivity : Activity() {
             }
         }
         if (m.type !in setOf(ModuleType.APP, ModuleType.FOLDER, ModuleType.SLIDER)) view.setOnLongClickListener { enterEdit(); true }
-        val bare = m.type in setOf(ModuleType.CLOCK, ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.WEATHER)
-        if (!inPatch || !bare) return view
-        // 片手の画面の左の列では、情報をワッペンに載せてそろえる
+        val framed = isFramed(m, inPatch)
+        // ワッペンの絵を自分で描く部品は、枠を描くかどうかだけ伝える（描かなければ中身が大きくなる）
+        (view as? PatchView)?.framed = framed
+        (view as? ZipperFader)?.framed = framed
+        if (m.type !in BARE || !framed) return view
+        // 布のない部品（時計・カレンダー・天気など）は、ワッペンに載せる
         return PatchLayout(this, PatchPainter.Shape.Round(22f)).apply {
             val p = dpi(10f)
             setPadding(p, p, p, p)
             addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             setOnLongClickListener { enterEdit(); true }
+        }
+    }
+
+    /**
+     * 部品 [m] にステッチの枠を付けるか。自分で選んでいればそれ。選んでいなければ、
+     * 布のない部品は片手の画面（[inPatch]）でだけ付け、ワッペンの部品はいつも付ける。
+     */
+    private fun isFramed(m: Module, inPatch: Boolean): Boolean =
+        m[Module.P_FRAME]?.let { it == "1" } ?: if (m.type in BARE) inPatch else true
+
+    /** 枠を付け外しできる部品なら、その切り替えのボタン。 */
+    private fun frameItem(m: Module): Pair<String, () -> Unit>? {
+        if (m.type !in FRAMEABLE) return null
+        val now = isFramed(m, store.thumbMode)
+        return (if (now) "ステッチの枠をなくす（中身を大きく）" else "ステッチの枠を付ける") to {
+            board().replace(m.with(Module.P_FRAME, if (now) "0" else "1"))
+            done()
         }
     }
 
@@ -699,7 +719,7 @@ class HomeActivity : Activity() {
             ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.SLIDER, ModuleType.MEDIA, ModuleType.WEATHER -> instrumentSheet(m)
             else -> openSheet(m.type.label) { s ->
                 s.setTabs(emptyList(), 0) {}
-                s.setBody(actionList(this, pageMoveItems(m) + listOf("外す" to { board().remove(m); done() }),
+                s.setBody(actionList(this, listOfNotNull(frameItem(m)) + pageMoveItems(m) + listOf("外す" to { board().remove(m); done() }),
                     note = "大きさは右下のつまみ、場所はドラッグで変えられます。"))
             }
         }
@@ -764,7 +784,7 @@ class HomeActivity : Activity() {
             ) + listOfNotNull(m[Module.P_TAP_APP]?.let { "タップで開くアプリをやめる" to { save(m.with(Module.P_TAP_APP, null)) } })
             else -> emptyList()
         }
-        s.setBody(actionList(this, items + pageMoveItems(m) + listOf("外す" to { board().remove(m); done() }),
+        s.setBody(actionList(this, items + listOfNotNull(frameItem(m)) + pageMoveItems(m) + listOf("外す" to { board().remove(m); done() }),
             note = "大きさは右下のつまみ、場所はドラッグで変えられます。"))
     }
 
@@ -1086,6 +1106,12 @@ class HomeActivity : Activity() {
     companion object {
         private const val REQUEST_HOME = 21
         private const val REQUEST_IMPORT = 31
+
+        /** 布のない部品（ワッペンに載せるかどうかを選べる）。 */
+        private val BARE = setOf(ModuleType.CLOCK, ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.WEATHER)
+
+        /** ステッチの枠を付け外しできる部品。 */
+        private val FRAMEABLE = BARE + setOf(ModuleType.AGENDA, ModuleType.BATTERY, ModuleType.MEDIA, ModuleType.SLIDER)
 
         /** アプリの設定のパネルに付ける目印（前後のアプリへ移るとき、同じパネルの中身だけ替える）。 */
         private const val APP_SETTINGS = "appSettings"

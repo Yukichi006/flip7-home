@@ -221,7 +221,15 @@ class DotCalendarView(
     private val onSwipe: (String) -> Unit,
     /** 今日に印を付けるか（ロック画面の壁紙のように、ひと月使い続ける絵では付けない）。 */
     private val markToday: Boolean = true,
+    /** 左上に月の名前（例：11月）を小さく書くか（ロック画面の壁紙では、外に大きく書くので書かない）。 */
+    private val showMonth: Boolean = true,
 ) : TickingView(context) {
+    private val month = context.threadText(9.5f, bold = true, color = Thread.DIM).apply { letterSpacing = 0.08f }
+    private val dayNum = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
+        fontFeatureSettings = "tnum"
+    }
     private val ring = context.stitch(0.9f, Thread.FAINT)
     private val todayRing = context.stitch(1.2f)
     private val week = context.threadText(9f, color = Thread.DIM).apply { textAlign = Paint.Align.CENTER }
@@ -242,25 +250,40 @@ class DotCalendarView(
         val lead = if (mondayFirst) (firstDow + 5) % 7 else firstDow - 1
         val weeks = (lead + days + 6) / 7
         val pad = context.dp(10f)
+        // 月の名前の行（左上に小さく）
+        val monthH = if (showMonth) month.textSize * 1.5f else 0f
+        if (showMonth) canvas.drawText("${cal.get(Calendar.MONTH) + 1}月", pad + context.dp(2f), pad + month.textSize, month)
         val headH = week.textSize * 1.6f
+        val top = pad + monthH
         val cw = (width - pad * 2) / 7f
-        val ch = (height - pad * 2 - headH) / weeks
-        val r = (min(cw, ch) * 0.24f).coerceAtMost(context.dp(9f))
+        val ch = (height - pad - top - headH) / weeks
+        val r = (min(cw, ch) * 0.3f).coerceAtMost(context.dp(10f))
         val names = if (mondayFirst) "月火水木金土日" else "日月火水木金土"
-        for (i in 0 until 7) canvas.drawText(names[i].toString(), pad + cw * (i + 0.5f), pad + week.textSize, week)
+        for (i in 0 until 7) canvas.drawText(names[i].toString(), pad + cw * (i + 0.5f), top + week.textSize, week)
         for (cell in 0 until weeks * 7) {
             val day = cell - lead + 1
             val cx = pad + cw * (cell % 7 + 0.5f)
-            val cy = pad + headH + ch * (cell / 7 + 0.5f)
-            when {
-                day < 1 || day > days -> canvas.drawCircle(cx, cy, r * 0.75f, ring)
+            val cy = top + headH + ch * (cell / 7 + 0.5f)
+            val dot = when {
+                day < 1 || day > days -> { canvas.drawCircle(cx, cy, r * 0.75f, ring); 0f }
                 day == today -> {
                     canvas.drawCircle(cx, cy, r * 1.05f, knot)
                     canvas.drawCircle(cx, cy, r * 1.6f, todayRing)
+                    r * 1.05f
                 }
-                else -> canvas.drawCircle(cx, cy, r * if (day < today) 0.8f else 1f, knot.apply { alpha = if (day < today) 150 else 255 })
+                else -> {
+                    val rr = r * if (day < today) 0.85f else 1f
+                    canvas.drawCircle(cx, cy, rr, knot.apply { alpha = if (day < today) 150 else 255 })
+                    rr
+                }
             }
             knot.alpha = 255
+            // 糸の玉の中に、日付をささやかに（布の色で抜く）
+            if (dot > 0f) {
+                dayNum.textSize = dot * 1.0f
+                dayNum.color = if (day < today) 0xB00C0C0D.toInt() else 0xD00C0C0D.toInt()
+                canvas.drawText(day.toString(), cx, cy - (dayNum.ascent() + dayNum.descent()) / 2, dayNum)
+            }
         }
     }
 
@@ -445,8 +468,12 @@ class ZipperFader(
         invalidate()
     }
 
+    /** ステッチの枠を描くか。 */
+    var framed = true
+        set(value) { field = value; invalidate() }
+
     override fun onDraw(canvas: Canvas) {
-        patch.draw(canvas, width, height)
+        if (framed) patch.draw(canvas, width, height)
         val alpha = Sewing.contentAlpha()
         val save = if (alpha < 255) canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), alpha) else -1
         drawZipper(canvas)
@@ -507,7 +534,26 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
 
     private val callback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) = invalidate()
-        override fun onPlaybackStateChanged(state: PlaybackState?) = invalidate()
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            if (isPlaying()) lastPlaying = System.currentTimeMillis()
+            invalidate()
+            // 一時停止してから 1 分たったら消す
+            postDelayed({ invalidate() }, PAUSE_KEEP_MS + 100)
+        }
+    }
+
+    /** 最後に再生していた時刻（一時停止のすぐあとは、続きを再生できるよう出しておく）。 */
+    private var lastPlaying = 0L
+
+    private fun isPlaying() = controller?.playbackState?.state.let {
+        it == PlaybackState.STATE_PLAYING || it == PlaybackState.STATE_BUFFERING
+    }
+
+    // 許可がないときは「許可して」と出す。許可があれば、再生している（一時停止して 1 分以内）ときだけ出す
+    override fun hidden(): Boolean {
+        if (!Badges.enabled(context)) return false
+        if (isPlaying()) { lastPlaying = System.currentTimeMillis(); return false }
+        return controller?.metadata == null || System.currentTimeMillis() - lastPlaying > PAUSE_KEEP_MS
     }
     private val sessions = MediaSessionManager.OnActiveSessionsChangedListener { list -> attach(list?.firstOrNull()) }
 
@@ -542,7 +588,7 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
         }
         val c = controller
         val meta = c?.metadata
-        val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "再生していません"
+        val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
         val artist = meta?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
         val playing = c?.playbackState?.state == PlaybackState.STATE_PLAYING
         val t = TextUtils.ellipsize(title, titleText, area.width(), TextUtils.TruncateAt.END)
@@ -580,6 +626,8 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // 出していないときは、ホーム画面のスワイプなどに任せる
+        if (hidden()) return false
         if (event.actionMasked == MotionEvent.ACTION_UP) {
             if (!Badges.enabled(context)) { needAccess(); return true }
             val t = controller?.transportControls
@@ -594,5 +642,10 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
         }
         super.onTouchEvent(event)
         return true
+    }
+
+    companion object {
+        /** 一時停止してから、出しておく時間。 */
+        private const val PAUSE_KEEP_MS = 60_000L
     }
 }

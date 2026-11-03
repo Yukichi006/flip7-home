@@ -204,6 +204,9 @@ class WeatherView(
         val now = if (lat != null && lon != null) WeatherRepo.get(lat, lon) else null
         if (lat == null || lon == null) {
             name.textSize = context.sp(10f)
+            // 細い部品でも見切れないように、文字を小さくして入れる
+            val w = name.measureText("選んでください")
+            if (w > width - pad * 2) name.textSize = (name.textSize * (width - pad * 2) / w).coerceAtLeast(context.sp(6f))
             canvas.drawText("地点を", width / 2f, height / 2f - name.textSize * 0.2f, name)
             canvas.drawText("選んでください", width / 2f, height / 2f + name.textSize * 1.2f, name)
             return
@@ -214,15 +217,19 @@ class WeatherView(
         val path = WeatherRepo.icon(kind)
         path.transform(Matrix().apply { setScale(iconS / 48f, iconS / 48f); postTranslate((width - iconS) / 2f, pad) })
         canvas.drawPath(path, stitchPaint(iconS * 0.06f, iconS * 0.11f, iconS * 0.08f))
-        canvas.drawText(label, width / 2f, pad + iconS + name.textSize * 1.3f, name)
+        // 天気の文字（晴れ時々くもり など）は、幅に入るときだけ書く。入らなければ書かずに、温度計を大きくする
+        val showLabel = label.isNotEmpty() && name.measureText(label) <= width - pad * 2
+        if (showLabel) canvas.drawText(label, width / 2f, pad + iconS + name.textSize * 1.3f, name)
         // 温度計
-        val top = pad + iconS + name.textSize * 2.2f
+        val top = pad + iconS + if (showLabel) name.textSize * 2.2f else context.dp(8f)
         val bottom = height - pad - big.textSize * 1.5f
         val n = SEGMENTS
         val gap = context.dp(3f)
         val segH = ((bottom - top - gap * (n - 1)) / n).coerceAtLeast(context.dp(2f))
         val segW = min(context.dp(22f), width * 0.36f)
-        val cx = width / 2f - (if (showMinMax) context.dp(6f) else 0f)
+        // 最高・最低の数字の分だけ、温度計を左へ寄せる（右の数字が見切れないように）
+        val side = if (showMinMax) context.dp(6f) + small.measureText("00°") else 0f
+        val cx = (width / 2f - side / 2).coerceAtLeast(segW / 2 + pad)
         fun level(t: Double) = ((t - LOW) / (HIGH - LOW) * n).roundToInt().coerceIn(1, n)
         val lit = now?.let { level(it.temp) } ?: 0
         for (i in 0 until n) {

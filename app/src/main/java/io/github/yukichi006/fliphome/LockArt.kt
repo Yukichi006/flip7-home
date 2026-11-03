@@ -89,7 +89,7 @@ object LockArt {
         canvas.translate(side, patchTop)
         PatchPainter(context, PatchPainter.Shape.Round(28f)).draw(canvas, pw, ph)
         // カレンダーは、ホーム画面の「月のカレンダー」の部品をそのまま描く（今日の印は付けない）
-        val cal = DotCalendarView(context, mondayFirst = false, hasSwipe = { false }, onSwipe = {}, markToday = false)
+        val cal = DotCalendarView(context, mondayFirst = false, hasSwipe = { false }, onSwipe = {}, markToday = false, showMonth = false)
         val pad = context.dpi(18f)
         cal.measure(View.MeasureSpec.makeMeasureSpec(pw - pad * 2, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(ph - pad * 2, View.MeasureSpec.EXACTLY))
         cal.layout(0, 0, pw - pad * 2, ph - pad * 2)

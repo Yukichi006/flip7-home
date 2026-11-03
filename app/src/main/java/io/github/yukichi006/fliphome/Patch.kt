@@ -133,9 +133,17 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
 abstract class PatchView(context: Context, shape: PatchPainter.Shape = PatchPainter.Shape.Round(18f)) : View(context), SewAware {
     protected val patch = PatchPainter(context, shape)
 
+    /** ステッチの枠（ワッペン）を描くか。描かないときは、その分だけ中身を大きくする。 */
+    var framed = true
+        set(value) { field = value; invalidate() }
+
+    /** 今は何も描かないか（再生中の曲が、再生していないときなど）。 */
+    protected open fun hidden() = false
+
     final override fun onDraw(canvas: Canvas) {
-        patch.draw(canvas, width, height)
-        val p = patch.contentPadding
+        if (hidden()) return
+        if (framed) patch.draw(canvas, width, height)
+        val p = if (framed) patch.contentPadding else context.dp(4f)
         val alpha = Sewing.contentAlpha()
         val save = if (alpha < 255) canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), alpha) else -1
         drawContent(canvas, RectF(p, p, width - p, height - p))

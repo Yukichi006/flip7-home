@@ -93,6 +93,9 @@ data class Module(
         const val P_MINMAX = "minmax"
         const val P_TAP_APP = "tapApp"
 
+        /** ステッチの枠：「1」で付ける、「0」でなくす（なければ、部品と画面ごとの決まり）。 */
+        const val P_FRAME = "frame"
+
         /** スワイプの向き（上下左右）ごとの動作のキー。値は "shade"・"drawer"・"app:<アプリのキー>"。 */
         fun gestureKey(dir: String) = "g.$dir"
 
