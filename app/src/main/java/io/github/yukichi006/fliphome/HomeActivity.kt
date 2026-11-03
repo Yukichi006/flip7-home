@@ -104,7 +104,9 @@ class HomeActivity : Activity() {
         })
         // 片手の画面：左に情報の列、右にめくれるアプリのパネル
         leftGrid = ModuleGrid(this).apply { setOnLongClickListener { enterEdit(); true } }
-        wireGrid(leftGrid) { store.leftBoard() }
+        // 左の列は 2 列のマス目。マスの大きさは右のパッドと同じくらいで、行の数は画面の高さから決める
+        leftGrid.autoRowsRatio = Thumb.CELL_RATIO
+        wireGrid(leftGrid) { store.leftBoard(leftGrid.rows) }
         topGrid = ModuleGrid(this).apply { setOnLongClickListener { enterEdit(); true } }
         wireGrid(topGrid) { store.topBoard(topGrid.rows) }
         rightCol = RightColumn(this, topGrid) { rows ->
@@ -238,7 +240,7 @@ class HomeActivity : Activity() {
         if (thumbMode) {
             rebuildThumb()
             dots.visibility = View.GONE
-            dock.visibility = View.GONE
+            rebuildDock(store.home)
             return
         }
         val home = store.home
@@ -248,9 +250,14 @@ class HomeActivity : Activity() {
         dots.count = home.pages.size
         dots.current = page
         dots.visibility = if (home.pages.size > 1) View.VISIBLE else View.GONE
+        rebuildDock(home)
+        grid.editing = editing
+    }
+
+    /** 下段のポケット（マス目の画面でも片手の画面でも同じ中身）。 */
+    private fun rebuildDock(home: Home) {
         dock.visibility = if (home.pocket) View.VISIBLE else View.GONE
         dock.setCells(home.dock.map { key -> key?.let { repo.find(it) }?.let { app -> PadView(this, app, repo, framed = false) { enterEdit() } } })
-        grid.editing = editing
         dock.editing = editing
     }
 
@@ -267,7 +274,7 @@ class HomeActivity : Activity() {
     /** 片手の画面を組み立てる：左の情報の列と、右のめくれるアプリのパネル。 */
     private fun rebuildThumb() {
         val t = store.thumb
-        leftGrid.configure(1, Thumb.LEFT_ROWS)
+        leftGrid.configure(Thumb.LEFT_COLS, leftGrid.rows)
         fill(leftGrid, t.left.modules, inPatches = true)
         fill(topGrid, t.top.modules, inPatches = true)
         rightCol.rows = t.rows
@@ -348,7 +355,7 @@ class HomeActivity : Activity() {
     private fun boardHolding(m: Module): Board {
         if (!store.thumbMode) return store.gridBoard(page)
         val top = store.topBoard(topGrid.rows)
-        return if (top.modules().any { it.id == m.id }) top else store.leftBoard()
+        return if (top.modules().any { it.id == m.id }) top else store.leftBoard(leftGrid.rows)
     }
 
     private fun refreshModules() {
@@ -528,6 +535,11 @@ class HomeActivity : Activity() {
             }
             val bookPeelMenu = menu.addSubMenu("パネルをめくる向き（いま：${store.bookPeel.label}）")
             for (p in PeelFrom.entries) bookPeelMenu.add(p.label).setOnMenuItemClickListener { store.bookPeel = p; rebuildHome(); true }
+            menu.add(if (home.pocket) "下段のポケットを隠す" else "下段のポケットを出す").setOnMenuItemClickListener {
+                store.setPocket(!home.pocket)
+                rebuildHome()
+                true
+            }
             menu.add("マス目の画面にする").setOnMenuItemClickListener { store.thumbMode = false; activeBoard = null; rebuildHome(); true }
         } else {
             menu.add("片手の画面にする").setOnMenuItemClickListener { store.thumbMode = true; activeBoard = null; rebuildHome(); true }

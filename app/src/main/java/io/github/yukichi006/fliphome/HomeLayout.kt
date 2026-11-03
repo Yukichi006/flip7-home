@@ -261,7 +261,11 @@ class LayoutStore(context: Context) {
                 val o = JSONObject(s)
                 val t = Thumb.fromJson(o)
                 // 0.11.0 の配置（右上の情報の欄がない）は、パネルを低くして、上に情報の欄を作る
-                if (o.has("top")) t else resized(t.copy(top = defaultTop()), Thumb.DEFAULT_ROWS).also { thumb = it }
+                var u = if (o.has("top")) t else resized(t.copy(top = defaultTop()), Thumb.DEFAULT_ROWS)
+                // 0.12.0 までの左の列（1 列）は、2 列のマス目に移す
+                if (!o.has("leftCols")) u = u.copy(left = leftOnGrid(u.left))
+                if (u !== t) thumb = u
+                u
             }.getOrNull()
         } ?: thumbFromHome().also { thumb = it }
         set(value) = prefs.edit().putString(KEY_THUMB, value.toJson().toString()).apply()
@@ -311,8 +315,13 @@ class LayoutStore(context: Context) {
         return null
     }
 
-    /** 左の情報の列（1 列 × [Thumb.LEFT_ROWS] 行）。 */
-    fun leftBoard() = Board(1, Thumb.LEFT_ROWS, { thumb.left.modules }, { list -> thumb = thumb.copy(left = Page(list)) }, ::newId)
+    /** 左の情報の列（[Thumb.LEFT_COLS] 列 × [rows] 行。行の数は画面の高さで決まる）。 */
+    fun leftBoard(rows: Int) = Board(Thumb.LEFT_COLS, rows, { thumb.left.modules }, { list -> thumb = thumb.copy(left = Page(list)) }, ::newId)
+
+    /** 左の列の部品を、2 列のマス目に 2×2 ずつ上から積み直す（0.12.0 までの 1 列の配置から移すとき）。 */
+    private fun leftOnGrid(left: Page) = Page(left.modules.sortedBy { it.row }.mapIndexed { i, m ->
+        m.copy(col = 0, row = i * 2, w = Thumb.LEFT_COLS, h = 2)
+    })
 
     /** 右のパネルの [index] 枚目の布（[Thumb.COLS] 列 × 行）。 */
     fun sheetBoard(index: Int) = Board(Thumb.COLS, thumb.rows, { thumb.sheets.getOrNull(index)?.modules.orEmpty() }, { list ->
@@ -341,10 +350,10 @@ class LayoutStore(context: Context) {
         val h = home
         val weather = h.pages.flatMap { it.modules }.firstOrNull { it.type == ModuleType.WEATHER }?.props.orEmpty()
         val left = listOf(
-            Module(newId(), ModuleType.CLOCK, 0, 0, 1, 1),
-            Module(newId(), ModuleType.CALENDAR, 0, 1, 1, 1),
-            Module(newId(), ModuleType.WEATHER, 0, 2, 1, 1, weather),
-            Module(newId(), ModuleType.BATTERY, 0, 3, 1, 1),
+            Module(newId(), ModuleType.CLOCK, 0, 0, 2, 2),
+            Module(newId(), ModuleType.CALENDAR, 0, 2, 2, 2),
+            Module(newId(), ModuleType.WEATHER, 0, 4, 2, 2, weather),
+            Module(newId(), ModuleType.BATTERY, 0, 6, 2, 2),
         )
         val apps = (h.pages.flatMap { p -> p.modules.filter { it.type == ModuleType.APP || it.type == ModuleType.FOLDER }.sortedWith(compareBy({ it.row }, { it.col })) } +
             h.dock.filterNotNull().map { Module(0, ModuleType.APP, 0, 0, 1, 1, mapOf(Module.P_APP to it)) })
@@ -416,6 +425,7 @@ class LayoutStore(context: Context) {
 data class Thumb(val left: Page, val sheets: List<Page>, val rows: Int, val top: Page = Page(emptyList())) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("rows", rows)
+        put("leftCols", LEFT_COLS)
         put("left", JSONObject().put("modules", JSONArray(left.modules.map { it.toJson() })))
         put("top", JSONObject().put("modules", JSONArray(top.modules.map { it.toJson() })))
         put("sheets", JSONArray(sheets.map { p -> JSONObject().put("modules", JSONArray(p.modules.map { it.toJson() })) }))
@@ -423,7 +433,7 @@ data class Thumb(val left: Page, val sheets: List<Page>, val rows: Int, val top:
 
     companion object {
         const val COLS = 3
-        const val LEFT_ROWS = 4
+        const val LEFT_COLS = 2
         const val DEFAULT_ROWS = 5
         const val MIN_ROWS = 2
 
@@ -524,6 +534,10 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
     private val badge = BadgePainter(context)
     private val rect = RectF()
 
+    /** 0 より大きいと、行の数を入れ物の高さから決める（マスの高さが幅のこの倍くらいになるだけ）。 */
+    var autoRowsRatio = 0f
+        set(value) { field = value; requestLayout() }
+
     /** マスの高さを、幅のこの倍までにする（0 なら入れ物いっぱいに広げる）。余った高さは上に空ける。 */
     var maxCellRatio = 0f
         set(value) { field = value; requestLayout() }
@@ -540,6 +554,11 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val h = MeasureSpec.getSize(heightMeasureSpec)
+        // 行の数を高さから決める（マスの高さが、幅の [autoRowsRatio] 倍にいちばん近くなるだけ入れる）
+        if (autoRowsRatio > 0f && w > 0 && h > 0) {
+            val r = (h / (w.toFloat() / cols * autoRowsRatio)).roundToInt().coerceAtLeast(1)
+            if (r != rows) { rows = r; invalidate() }
+        }
         val cw = w.toFloat() / cols
         val ch = cellH(w, h)
         for (i in 0 until childCount) {
