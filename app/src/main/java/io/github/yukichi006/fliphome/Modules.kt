@@ -55,6 +55,7 @@ class ClockView(context: Context) : View(context) {
         textAlign = Paint.Align.CENTER
         letterSpacing = 0.12f
     }
+    private val dateSize = date.textSize
     private val seam = context.stitch(1.0f, Thread.DIM)
     private val path = Path()
     private val bounds = Rect()
@@ -97,9 +98,16 @@ class ClockView(context: Context) : View(context) {
         val pattern = if (DateFormat.is24HourFormat(context)) "HH:mm" else "h:mm"
         val time = DateFormat.format(pattern, now).toString()
 
+        // 端末の言語に関係なく、曜日は日本語（月・火…）で出す
+        val dateText = java.text.SimpleDateFormat("M月d日（E）", Locale.JAPAN).format(now.time)
+        val side = context.dp(14f)
+        // 低い部品では、日付と下の縫い目を省いて、時計の数字を大きく出す
+        val withDate = height >= context.dp(120f)
+        date.textSize = dateSize
+        if (date.measureText(dateText) > width - side * 2) date.textSize *= (width - side * 2) / date.measureText(dateText)
         val seamY = height - context.dp(10f)
         val dateY = seamY - context.dp(22f)
-        val maxH = dateY - date.textSize - context.dp(18f)
+        val maxH = if (withDate) dateY - date.textSize - context.dp(18f) else height - context.dp(12f)
         // 幅と高さの両方に収まる大きさにする
         digits.textSize = 100f
         digits.getTextBounds("00:00", 0, 5, bounds)
@@ -110,12 +118,9 @@ class ClockView(context: Context) : View(context) {
         path.reset()
         digits.getTextPath(time, 0, time.length, width / 2f, baseline, path)
         canvas.drawPath(path, stitch)
+        if (!withDate) return
 
-        // 端末の言語に関係なく、曜日は日本語（月・火…）で出す
-        val dateText = java.text.SimpleDateFormat("M月d日（E）", Locale.JAPAN).format(now.time)
         canvas.drawText(dateText, width / 2f, dateY, date)
-
-        val side = context.dp(14f)
         canvas.drawDoubleSeam(side, width - side, seamY, context.dp(5f), seam)
     }
 }

@@ -603,38 +603,49 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
 
     override fun drawContent(canvas: Canvas, area: RectF) {
         if (!Badges.enabled(context)) {
-            canvas.drawText("再生中の曲", area.left, area.top + titleText.textSize, titleText)
-            canvas.drawText("タップして表示を許可", area.left, area.top + titleText.textSize * 2.6f, subText)
+            fitTitle(area.height() * 0.45f)
+            drawLine(canvas, "再生中の曲", titleText, area, area.top + titleText.textSize)
+            val y = area.top + titleText.textSize * 1.4f + subText.textSize
+            if (y <= area.bottom) drawLine(canvas, "タップして表示を許可", subText, area, y)
             buttons.forEach { it.setEmpty() }
             return
         }
         val c = controller
-        val meta = c?.metadata
-        // 再生していないときは、曲名を書かない（枠とボタンだけ）
-        val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
-        val artist = meta?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
-        val playing = c?.playbackState?.state == PlaybackState.STATE_PLAYING
-        val t = TextUtils.ellipsize(title, titleText, area.width(), TextUtils.TruncateAt.END)
-        canvas.drawText(t, 0, t.length, area.left, area.top + titleText.textSize, titleText)
-        if (artist.isNotEmpty()) {
-            val a = TextUtils.ellipsize(artist, subText, area.width(), TextUtils.TruncateAt.END)
-            canvas.drawText(a, 0, a.length, area.left, area.top + titleText.textSize + subText.textSize * 1.5f, subText)
-        }
-        // ボタン（前へ・再生／一時停止・次へ）
-        val s = min(context.dp(26f), area.height() * 0.45f)
+        // 曲名だけを上に、ボタン（前へ・再生／一時停止・次へ）を下に。重ならないように、入りきらなければ小さくする
+        val title = c?.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
+        val playing = c?.playbackState?.state.let { it == PlaybackState.STATE_PLAYING || it == PlaybackState.STATE_BUFFERING }
+        val s = minOf(context.dp(26f), area.width() / 4.6f, area.height() * 0.5f)
         val y = area.bottom - s
+        val room = y - area.top - context.dp(6f)
+        fitTitle(room)
+        if (title.isNotEmpty() && room >= context.sp(8f)) drawLine(canvas, title, titleText, area, area.top + titleText.textSize)
         for (i in 0 until 3) buttons[i].set(area.left + i * s * 1.8f, y, area.left + i * s * 1.8f + s, y + s)
         drawPrev(canvas, buttons[0])
-        if (playing) drawPause(canvas, buttons[1]) else drawPlay(canvas, buttons[1])
+        // 再生しているときは、一時停止のボタンをオレンジの糸で縫って、再生中だとわかるようにする
+        if (playing) drawPause(canvas, buttons[1], activeIcon) else drawPlay(canvas, buttons[1])
         drawNext(canvas, buttons[2])
+    }
+
+    private val activeIcon = context.stitch(1.6f, Thread.ALERT)
+
+    /** 曲名の文字を、高さ [room] に入る大きさにする（いちばん大きくて 13sp）。 */
+    private fun fitTitle(room: Float) {
+        titleText.textSize = (room / 1.2f).coerceIn(context.sp(8f), context.sp(13f))
+    }
+
+    /** 1 行の文字を、幅に入らなければ終わりを「…」にして書く。 */
+    private fun drawLine(canvas: Canvas, text: String, paint: android.text.TextPaint, area: RectF, baseline: Float) {
+        val t = if (paint.measureText(text) <= area.width()) text
+            else text.substring(0, paint.breakText(text, true, (area.width() - paint.measureText("…")).coerceAtLeast(0f), null)) + "…"
+        canvas.drawText(t, area.left, baseline, paint)
     }
 
     private fun drawPlay(canvas: Canvas, r: RectF) =
         canvas.drawPath(Path().apply { moveTo(r.left + r.width() * 0.25f, r.top); lineTo(r.right, r.centerY()); lineTo(r.left + r.width() * 0.25f, r.bottom); close() }, icon)
 
-    private fun drawPause(canvas: Canvas, r: RectF) {
-        canvas.drawLine(r.left + r.width() * 0.3f, r.top, r.left + r.width() * 0.3f, r.bottom, icon)
-        canvas.drawLine(r.right - r.width() * 0.3f, r.top, r.right - r.width() * 0.3f, r.bottom, icon)
+    private fun drawPause(canvas: Canvas, r: RectF, paint: Paint = icon) {
+        canvas.drawLine(r.left + r.width() * 0.3f, r.top, r.left + r.width() * 0.3f, r.bottom, paint)
+        canvas.drawLine(r.right - r.width() * 0.3f, r.top, r.right - r.width() * 0.3f, r.bottom, paint)
     }
 
     private fun drawPrev(canvas: Canvas, r: RectF) {

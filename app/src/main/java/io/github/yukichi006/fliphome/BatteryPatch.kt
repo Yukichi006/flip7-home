@@ -175,14 +175,17 @@ class BatteryPatch(context: Context) : PatchView(context) {
                 else -> null
             }
             val nameW = area.width() - big.measureText(num) - unit.measureText("%") - context.dp(8f)
-            val t = TextUtils.ellipsize(row.name, name, nameW, TextUtils.TruncateAt.END)
+            val barTop = baseline + context.dp(6f)
+            // ひとことは名前の下に。下に入る高さがなければ、名前のあとに添える（棒に重ならないように）
+            val noteBelow = note != null && top + name.textSize + small.textSize * 1.35f <= barTop - context.dp(2f)
+            val shownName = if (note != null && !noteBelow) "${row.name}・$note" else row.name
+            val t = TextUtils.ellipsize(shownName, name, nameW, TextUtils.TruncateAt.END)
             canvas.drawText(t, 0, t.length, area.left, top + name.textSize, name)
-            if (note != null) {
+            if (note != null && noteBelow) {
                 val n = TextUtils.ellipsize(note, small, nameW, TextUtils.TruncateAt.END)
                 canvas.drawText(n, 0, n.length, area.left, top + name.textSize + small.textSize * 1.35f, small)
             }
             // 残量の棒：外枠は細いステッチ、残っている分はサテン刺繍のように糸で埋める
-            val barTop = baseline + context.dp(6f)
             val track = RectF(area.left, barTop, area.right, barTop + barH)
             canvas.drawRoundRect(track, barH / 2, barH / 2, trackStitch)
             val fillW = (track.width() * row.level / 100f).coerceAtLeast(if (row.level > 0) barH else 0f)

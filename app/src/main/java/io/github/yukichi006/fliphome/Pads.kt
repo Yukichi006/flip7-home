@@ -304,10 +304,15 @@ class PadView(
         }
         if (label.measureText(text) <= maxW) return listOf(text)
         label.textSize = small
-        var cut = label.breakText(text, true, maxW, null).coerceAtLeast(1)
-        // 空白があれば、そこで分ける
-        val space = text.lastIndexOf(' ', cut)
-        if (space > 0 && cut < text.length) cut = space
+        val fit = label.breakText(text, true, maxW, null).coerceAtLeast(1)
+        // 分けてよい所：空白、英数字と日本語の境目。どちらの行も幅に入る所のうち、真ん中にいちばん近い所で分ける
+        fun latin(c: Char) = c.code < 0x80
+        val bounds = (1 until text.length).filter { i -> text[i] == ' ' || text[i - 1] == ' ' || latin(text[i]) != latin(text[i - 1]) }
+        val fits = bounds.filter { i -> i <= fit && label.measureText(text.substring(i).trim()) <= maxW }
+        // 境目で分けられなければ、2 行の長さがそろう所で分ける（1 文字だけが 2 行目に落ちないように）
+        val cut = fits.minByOrNull { abs(it - text.length / 2) }
+            ?: ((text.length + 1) / 2).coerceAtMost(fit).takeIf { label.measureText(text.substring(it)) <= maxW }
+            ?: fit
         val first = text.substring(0, cut).trimEnd()
         val rest = text.substring(cut).trimStart()
         val second = android.text.TextUtils.ellipsize(rest, label, maxW, android.text.TextUtils.TruncateAt.END)
@@ -403,11 +408,13 @@ class PadView(
 
     /** アイコンとアプリ名（と通知の印）を描く。 */
     private fun drawFace(canvas: Canvas, shown: AppEntry, withBadge: Boolean) {
+        // 横は縫い目のすぐ内側まで使い、縦は文字の下が縫い目にかからないように少し多めに空ける
         val inner = if (framed) patch.margin + dp(7f) else dp(2f)
+        val innerV = if (framed) patch.seamInset + dp(6f) else dp(2f)
         val lines = fitLabel(repo.label(shown), width - inner * 2)
         val lineH = label.textSize * 1.15f
-        val labelH = lineH * lines.size + label.textSize * 0.15f
-        val iconPx = min(width - inner * 2, height - inner * 2 - labelH - dp(3f)).coerceAtMost(dp(46f)).coerceAtLeast(dp(14f)).toInt()
+        val labelH = lineH * lines.size + label.textSize * 0.3f
+        val iconPx = min(width - inner * 2, height - innerV * 2 - labelH - dp(3f)).coerceAtMost(dp(46f)).coerceAtLeast(dp(14f)).toInt()
         val total = iconPx + dp(3f) + labelH
         val top = (height - total) / 2f
         canvas.drawBitmap(repo.icon(shown, iconPx) { invalidate() }, (width - iconPx) / 2f, top, null)
