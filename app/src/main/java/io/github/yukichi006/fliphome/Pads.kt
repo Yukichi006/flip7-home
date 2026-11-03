@@ -680,6 +680,25 @@ class PocketDock(context: Context) : PatchLayout(context, PatchPainter.Shape.Poc
         setPadding(p, p + context.dpi(6f), p, p)
     }
 
+    /** 口のファスナー（null なら、ふつうの二重の縫い目）。右へ引ききると、アプリ一覧が開く。 */
+    var zipper: ZipperTrack? = null
+        set(value) {
+            field = value
+            patch.pocketZip = value != null
+            val p = patch.contentPadding.toInt()
+            // ファスナーの帯の分だけ、アプリを下げる
+            val top = if (value != null) (patch.seamInset + value.band).toInt() else p + context.dpi(6f)
+            setPadding(p, top, p, p)
+            requestLayout()
+            invalidate()
+        }
+
+    private fun placeZipper(z: ZipperTrack) {
+        // かんぬき止め（両端から 14dp）の内側に張る。左は引き手のつまみの分を空ける
+        val bar = patch.seamInset + context.dp(14f)
+        z.place(bar + context.dp(6f) + z.pullReach, width - bar - context.dp(10f) - z.th * 1.6f, patch.seamInset + z.band / 2 - context.dp(2f))
+    }
+
     /** 枠ごとのアプリ（空の枠は null）。 */
     fun setCells(list: List<View?>) {
         removeAllViews()
@@ -719,6 +738,12 @@ class PocketDock(context: Context) : PatchLayout(context, PatchPainter.Shape.Poc
 
     override fun dispatchDraw(canvas: Canvas) {
         super.dispatchDraw(canvas)
+        zipper?.let { z ->
+            placeZipper(z)
+            val save = if (editing) canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), 90) else -1
+            z.draw(canvas)
+            if (save >= 0) canvas.restoreToCount(save)
+        }
         if (!editing) return
         val o = context.dp(BadgePainter.R_DP) * 0.3f
         for (i in 0 until LayoutStore.DOCK_SLOTS) {
@@ -728,13 +753,28 @@ class PocketDock(context: Context) : PatchLayout(context, PatchPainter.Shape.Poc
         }
     }
 
-    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = editing
+    private var zipTouch = false
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (editing) return true
+        // ファスナーの帯か引き手に触れたら、ファスナーを引く（アプリには渡さない）
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            val z = zipper
+            zipTouch = z != null && run { placeZipper(z); z.hit(ev.x, ev.y) }
+        }
+        return zipTouch
+    }
 
     private var downSlot = -1
     private var downRemove = false
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(ev: MotionEvent): Boolean {
+        if (!editing && zipTouch) {
+            zipper?.onTouch(ev)
+            if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) zipTouch = false
+            return true
+        }
         if (!editing) return super.onTouchEvent(ev)
         val i = ((ev.x - paddingLeft) / slotW()).toInt().coerceIn(0, LayoutStore.DOCK_SLOTS - 1)
         when (ev.actionMasked) {

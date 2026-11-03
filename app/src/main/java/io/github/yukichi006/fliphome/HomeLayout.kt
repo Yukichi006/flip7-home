@@ -43,7 +43,6 @@ enum class ModuleType(
     MEDIA("再生中の曲", "曲名と再生ボタン", 3, 1, true),
     WEATHER("天気", "天気と 13 目盛りの温度計（地点を選ぶ）", 1, 3, true),
     ANALOG("アナログ時計", "カバー画面と同じ、刺繍の文字盤の時計", 2, 2, true),
-    ZIP("ファスナー（アプリ一覧）", "横向きの大きなファスナー。左から右へ開くと、アプリ一覧に切り替わる", 3, 1, true, minW = 2, maxH = 1),
 }
 
 /**
@@ -256,6 +255,11 @@ class LayoutStore(context: Context) {
     // ------------------------------------------------------------------
     // 片手の画面（左に情報の列、右にめくれるアプリのパネル）
     // ------------------------------------------------------------------
+
+    /** 下段のポケットの口をファスナーにするか（右へ引くとアプリ一覧）。最初は付ける。 */
+    var dockZip: Boolean
+        get() = prefs.getBoolean("dockZip", true)
+        set(value) = prefs.edit().putBoolean("dockZip", value).apply()
 
     /** 片手の画面にしているか（false ならマス目の画面）。最初は片手の画面。 */
     var thumbMode: Boolean

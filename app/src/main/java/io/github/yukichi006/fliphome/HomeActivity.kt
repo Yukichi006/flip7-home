@@ -246,6 +246,11 @@ class HomeActivity : Activity() {
     /** 下段のポケット（マス目の画面でも片手の画面でも同じ中身）。 */
     private fun rebuildDock(home: Home) {
         dock.visibility = if (home.pocket) View.VISIBLE else View.GONE
+        // 口のファスナー：右へ引ききると、アプリ一覧が開く。ファスナーの帯の分だけ、ポケットを高くする
+        val zip = store.dockZip
+        if ((dock.zipper != null) != zip) dock.zipper = if (zip) ZipperTrack(dock) { openDrawer() } else null
+        val h = dpi(if (zip) 138f else 124f)
+        if (dock.layoutParams.height != h) dock.layoutParams = dock.layoutParams.apply { height = h }
         dock.setCells(home.dock.map { key ->
             if (key == LayoutStore.DRAWER_KEY) DrawerButton(this, onOpen = { openDrawer() }, onLongPress = { enterEdit() })
             else key?.let { repo.find(it) }?.let { app -> PadView(this, app, repo, framed = false) { enterEdit() } }
@@ -297,7 +302,6 @@ class HomeActivity : Activity() {
         val view: View = when (m.type) {
             ModuleType.CLOCK -> ClockView(this)
             ModuleType.ANALOG -> AnalogClockView(this)
-            ModuleType.ZIP -> ZipperDrawerView(this, onOpen = { openDrawer() }, onLongPress = { enterEdit() })
             ModuleType.AGENDA -> AgendaView(this)
             ModuleType.BATTERY -> BatteryPatch(this)
             // アンインストールされたアプリ（や一時的に使えない仕事用のアプリ）は表示しないだけで、配置は残す
@@ -332,7 +336,7 @@ class HomeActivity : Activity() {
                 }
             }
         }
-        if (m.type !in setOf(ModuleType.APP, ModuleType.FOLDER, ModuleType.SLIDER, ModuleType.ZIP)) view.setOnLongClickListener { enterEdit(); true }
+        if (m.type !in setOf(ModuleType.APP, ModuleType.FOLDER, ModuleType.SLIDER)) view.setOnLongClickListener { enterEdit(); true }
         val bare = m.type in setOf(ModuleType.CLOCK, ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.WEATHER)
         if (!inPatch || !bare) return view
         // 片手の画面の左の列では、情報をワッペンに載せてそろえる
@@ -532,6 +536,7 @@ class HomeActivity : Activity() {
                 rebuildHome()
                 true
             }
+            zipMenu(home)
             menu.add("マス目の画面にする").setOnMenuItemClickListener { store.thumbMode = false; activeBoard = null; rebuildHome(); true }
         } else {
             menu.add("片手の画面にする").setOnMenuItemClickListener { store.thumbMode = true; activeBoard = null; rebuildHome(); true }
@@ -605,6 +610,17 @@ class HomeActivity : Activity() {
         }
         menu.add(if (home.pocket) "下段のポケットを隠す" else "下段のポケットを出す").setOnMenuItemClickListener {
             store.setPocket(!home.pocket)
+            rebuildHome()
+            true
+        }
+        zipMenu(home)
+    }
+
+    /** 下段のポケットの口のファスナー（アプリ一覧）を付ける・外す。 */
+    private fun PopupMenu.zipMenu(home: Home) {
+        if (!home.pocket) return
+        menu.add(if (store.dockZip) "下段のファスナー（アプリ一覧）を外す" else "下段のファスナー（アプリ一覧）を付ける").setOnMenuItemClickListener {
+            store.dockZip = !store.dockZip
             rebuildHome()
             true
         }

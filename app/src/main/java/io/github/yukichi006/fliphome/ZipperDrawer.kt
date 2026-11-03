@@ -1,8 +1,6 @@
 package io.github.yukichi006.fliphome
 
 import android.animation.ValueAnimator
-import android.annotation.SuppressLint
-import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -16,22 +14,17 @@ import android.view.animation.OvershootInterpolator
 import kotlin.math.abs
 
 /**
- * 横向きの大きなファスナー（アプリ一覧を開く部品）。左端の引き手をつまんで右へ引くと、引き手が通ったところが開き、
- * すき間から裏地とアプリの四角がのぞく。右端まで開いて離すと、アプリ一覧に切り替わる（[onOpen]）。
+ * 下段のポケットの口に付けた、横向きのファスナー。左端の引き手をつまんで右へ引くと、引き手が通ったところが V の字に開き、
+ * すき間から裏地とアプリの四角がのぞく。右端の近くまで開いて離すと、アプリ一覧に切り替わる（[onOpen]）。
  * 途中で離すと、引き手は左へ戻ってファスナーが閉じる。タップすると、少しだけ開いて「引ける」ことを知らせる。
- * 長押しで [onLongPress]（編集モード）。
+ *
+ * 描くのと指の動きを受けるのは、ポケット（[host]）から呼んでもらう。
  */
-@SuppressLint("ViewConstructor")
-class ZipperDrawerView(
-    context: Context,
-    private val onOpen: () -> Unit,
-    private val onLongPress: () -> Unit,
-) : View(context), SewAware {
-    private val patch = PatchPainter(context, PatchPainter.Shape.Round(16f))
+class ZipperTrack(private val host: View, private val onOpen: () -> Unit) {
+    private val context = host.context
     private val lining = Fabric.paint(context, Cloth.LINING)
     private val dark = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF050505.toInt() }
     private val tooth = Paint(Paint.ANTI_ALIAS_FLAG).apply { setShadowLayer(context.dp(0.8f), 0f, context.dp(1f), Thread.SHADOW) }
-    private val tape = context.stitch(1.0f, Thread.DIM)
     private val pullFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Cloth.FELT
         setShadowLayer(context.dp(4f), 0f, context.dp(2f), 0xC0000000.toInt())
@@ -41,31 +34,57 @@ class ZipperDrawerView(
     private val rect = RectF()
     private val path = Path()
 
+    /** 歯の高さ（片側）。 */
+    val th = context.dp(6.5f)
+
+    /** ファスナーの帯の高さ（ポケットの上に、この分を空けてもらう）。 */
+    val band = th * 2 + context.dp(16f)
+
+    // 引き手の大きさ
+    private val bodyW = th * 3.4f
+    private val bodyH = th * 3.0f
+    private val tabW = th * 3.6f
+
+    /** 引き手のつまみ（左へ垂れた分）と本体の左側の長さ。左端はこの分だけ空ける。 */
+    val pullReach = bodyW * 0.35f + tabW - context.dp(4f)
+
     /** 開き具合（0：閉じている〜1：右端まで開いた）。 */
     private var value = 0f
-        set(v) { field = v; invalidate() }
+        set(v) { field = v; host.invalidate() }
+
+    private var left = 0f
+    private var right = 0f
+    private var cy = 0f
+
+    /** ファスナーを張る場所（歯の並ぶ左端と右端、真ん中の高さ）。描く前に決めてもらう。 */
+    fun place(left: Float, right: Float, cy: Float) {
+        this.left = left
+        this.right = right
+        this.cy = cy
+    }
+
+    private fun pullX() = left + (right - left) * value
+
+    // ---------------- 指の動き ----------------
 
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
     private var downY = 0f
     private var startValue = 0f
-    private var grabbed = false
     private var moved = false
+    var dragging = false
+        private set
     private var anim: ValueAnimator? = null
-    private val longPress = Runnable { if (!moved) { grabbed = false; onLongPress() } }
 
-    init { contentDescription = "ファスナー（アプリ一覧）" }
+    /** この場所に触れたら、ファスナーを引き始めるか（帯の上か、引き手の上）。 */
+    fun hit(x: Float, y: Float): Boolean {
+        val px = pullX()
+        val onPull = x in px - pullReach - context.dp(8f)..px + bodyW + context.dp(8f) && abs(y - cy) < bodyH
+        val onBand = abs(y - cy) < band / 2 + context.dp(4f) && x in left - pullReach..right
+        return onPull || onBand
+    }
 
-    /** 歯の高さ（片側）。部品の高さに合わせて大きくする。 */
-    private fun th() = (height * 0.12f).coerceIn(dp(6f), dp(14f))
-
-    // 左端は、引き手のつまみが布からはみ出さないだけ空ける。右端は留め具の分
-    private fun trackLeft() = patch.margin + dp(6f) + th() * (3.4f * 0.35f + 3.6f) - dp(4f)
-    private fun trackRight() = width - patch.margin - dp(12f) - th() * 2.4f
-    private fun pullX() = trackLeft() + (trackRight() - trackLeft()) * value
-
-    @SuppressLint("ClickableViewAccessibility")
-    override fun onTouchEvent(ev: MotionEvent): Boolean {
+    fun onTouch(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 anim?.cancel()
@@ -73,31 +92,26 @@ class ZipperDrawerView(
                 downY = ev.y
                 startValue = value
                 moved = false
-                grabbed = true
-                parent?.requestDisallowInterceptTouchEvent(true)
-                postDelayed(longPress, ViewConfiguration.getLongPressTimeout().toLong())
+                dragging = true
+                host.parent?.requestDisallowInterceptTouchEvent(true)
             }
-            MotionEvent.ACTION_MOVE -> if (grabbed) {
+            MotionEvent.ACTION_MOVE -> if (dragging) {
                 val dx = ev.x - downX
-                if (!moved && (abs(dx) > slop || abs(ev.y - downY) > slop)) {
-                    moved = true
-                    removeCallbacks(longPress)
-                }
+                if (!moved && (abs(dx) > slop || abs(ev.y - downY) > slop)) moved = true
                 if (moved) {
-                    val v = (startValue + dx / (trackRight() - trackLeft())).coerceIn(0f, 1f)
-                    // 歯を 10 個ぶん開くごとに、カチッと小さく震える
-                    if ((v * 10).toInt() != (value * 10).toInt()) performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                    val v = (startValue + dx / (right - left)).coerceIn(0f, 1f)
+                    // 1 割開くごとに、カチッと小さく震える
+                    if ((v * 10).toInt() != (value * 10).toInt()) host.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                     value = v
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                removeCallbacks(longPress)
-                if (!grabbed) return true
-                grabbed = false
+                if (!dragging) return false
+                dragging = false
                 when {
                     !moved && ev.actionMasked == MotionEvent.ACTION_UP -> nudge()
                     value > 0.85f -> openAll()
-                    else -> closeBack()
+                    else -> animateTo(0f, 260, DecelerateInterpolator(1.6f))
                 }
             }
         }
@@ -107,13 +121,11 @@ class ZipperDrawerView(
     /** 右端まで開ききってから、アプリ一覧に切り替える。一覧が開いたら、見えないうちに閉じておく。 */
     private fun openAll() {
         animateTo(1f, 120, DecelerateInterpolator()) {
-            performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+            host.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
             onOpen()
-            postDelayed({ value = 0f }, 450)
+            host.postDelayed({ value = 0f }, 450)
         }
     }
-
-    private fun closeBack() = animateTo(0f, 260, DecelerateInterpolator(1.6f))
 
     /** タップされたら、少しだけ開いて閉じる（引けることを知らせる）。 */
     private fun nudge() {
@@ -135,29 +147,19 @@ class ZipperDrawerView(
         }
     }
 
-    override fun onDraw(canvas: Canvas) {
-        patch.draw(canvas, width, height)
-        val alpha = Sewing.contentAlpha()
-        val save = if (alpha < 255) canvas.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), alpha) else -1
-        drawZipper(canvas)
-        if (save >= 0) canvas.restoreToCount(save)
-    }
+    // ---------------- 描く ----------------
 
-    private fun drawZipper(canvas: Canvas) {
-        val left = trackLeft()
-        val right = trackRight()
+    fun draw(canvas: Canvas) {
         if (right <= left) return
-        val cy = height / 2f
-        val th = th()
-        val tw = th * 0.62f                                      // 歯の幅
+        val tw = th * 0.62f
         val step = tw * 1.15f
         val px = pullX()
         // 開いたところの広がり（引き手の近くは狭く、遠いほど広い V の字）
-        val spread = th * 1.6f
-        fun gapAt(x: Float) = if (x >= px) 0f else spread * ((px - x) / (px - left + dp(30f))).coerceIn(0f, 1f) + th * 0.15f
+        val spread = th * 1.2f
+        fun gapAt(x: Float) = if (x >= px) 0f else spread * ((px - x) / (px - left + context.dp(30f))).coerceIn(0f, 1f) + th * 0.15f
 
         // 1) すき間：裏地と、その奥にのぞくアプリの四角
-        if (px > left + dp(1f)) {
+        if (px > left + context.dp(1f)) {
             path.reset()
             path.moveTo(left, cy - gapAt(left))
             path.lineTo(px, cy)
@@ -177,22 +179,12 @@ class ZipperDrawerView(
             canvas.restore()
         }
 
-        // 2) テープの縫い目（上下の 2 本。開いたところは外へ逃げる）
-        val tapeOff = th * 1.9f
-        path.reset()
-        path.moveTo(left, cy - tapeOff - gapAt(left)); path.lineTo(px, cy - tapeOff); path.lineTo(right, cy - tapeOff)
-        canvas.drawPath(path, tape)
-        path.reset()
-        path.moveTo(left, cy + tapeOff + gapAt(left)); path.lineTo(px, cy + tapeOff); path.lineTo(right, cy + tapeOff)
-        canvas.drawPath(path, tape)
-
-        // 3) 歯：上下交互に並べる。閉じたところ（引き手より右）はかみ合って白く、開いたところは離れて薄い
+        // 2) 歯：上下交互に並べる。閉じたところ（引き手より右）はかみ合って白く、開いたところは離れて薄い
         var x = left
         var top = true
         while (x <= right) {
-            val open = x < px
             val g = gapAt(x)
-            tooth.color = if (open) Thread.DIM else Thread.COLOR
+            tooth.color = if (x < px) Thread.DIM else Thread.COLOR
             if (top) rect.set(x - tw / 2, cy - th - g, x + tw / 2, cy + th * 0.15f - g)
             else rect.set(x - tw / 2, cy - th * 0.15f + g, x + tw / 2, cy + th + g)
             canvas.drawRoundRect(rect, tw * 0.3f, tw * 0.3f, tooth)
@@ -203,18 +195,15 @@ class ZipperDrawerView(
         rect.set(right + tw * 0.4f, cy - th * 1.2f, right + tw * 2.2f, cy + th * 1.2f)
         canvas.drawRoundRect(rect, tw * 0.5f, tw * 0.5f, pullFill)
 
-
-        // 4) 引き手：歯を包む本体と、左へ垂れたつまみ
-        val bw = th * 3.4f
-        val bh = th * 3.0f
-        val body = RectF(px - bw * 0.35f, cy - bh / 2, px + bw * 0.65f, cy + bh / 2)
-        val tabW = th * 3.6f
-        val tab = RectF(body.left - tabW + dp(4f), cy - th * 0.9f, body.left + dp(4f), cy + th * 0.9f)
+        // 3) 引き手：歯を包む本体と、左へ垂れたつまみ
+        val d = context.dp(1f)
+        val body = RectF(px - bodyW * 0.35f, cy - bodyH / 2, px + bodyW * 0.65f, cy + bodyH / 2)
+        val tab = RectF(body.left - tabW + 4 * d, cy - th * 0.9f, body.left + 4 * d, cy + th * 0.9f)
         canvas.drawRoundRect(tab, th * 0.8f, th * 0.8f, pullFill)
-        rect.set(tab.left + dp(3f), tab.top + dp(2.5f), tab.right - dp(4f), tab.bottom - dp(2.5f))
+        rect.set(tab.left + 3 * d, tab.top + 2.5f * d, tab.right - 4 * d, tab.bottom - 2.5f * d)
         canvas.drawRoundRect(rect, th * 0.6f, th * 0.6f, pullStitch)
         canvas.drawRoundRect(body, th * 0.9f, th * 0.9f, pullFill)
-        rect.set(body.left + dp(2.5f), body.top + dp(2.5f), body.right - dp(2.5f), body.bottom - dp(2.5f))
+        rect.set(body.left + 2.5f * d, body.top + 2.5f * d, body.right - 2.5f * d, body.bottom - 2.5f * d)
         canvas.drawRoundRect(rect, th * 0.7f, th * 0.7f, pullStitch)
     }
 }

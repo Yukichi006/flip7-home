@@ -50,6 +50,12 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
     private val measure = android.graphics.PathMeasure()
     private val partial = Path()
 
+    /** ポケットの口をファスナーにするか（[Shape.Pocket] のとき）。 */
+    var pocketZip = false
+
+    /** 布の内側の縫い目の位置（布の端から）。 */
+    val seamInset: Float get() = margin + inset
+
     /** 縁をオレンジの糸で縫うか（通知の印）。 */
     var alert = false
 
@@ -85,16 +91,19 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
             }
             Shape.Pocket -> {
                 val gap = context.dp(5f)
-                canvas.drawLine(rect.left, rect.top, rect.right, rect.top, stitch)
-                canvas.drawLine(rect.left, rect.top + gap, rect.right, rect.top + gap, stitch)
+                // 口がファスナーのときは、口の二重の縫い目の代わりに、ファスナーを（ポケットの側で）描く
+                if (!pocketZip) {
+                    canvas.drawLine(rect.left, rect.top, rect.right, rect.top, stitch)
+                    canvas.drawLine(rect.left, rect.top + gap, rect.right, rect.top + gap, stitch)
+                }
                 val r = context.dp(28f).coerceAtMost(rect.height() / 2)
                 path.reset()
-                path.moveTo(rect.left, rect.top + gap * 2)
+                path.moveTo(rect.left, if (pocketZip) rect.top + gap else rect.top + gap * 2)
                 path.lineTo(rect.left, rect.bottom - r)
                 path.quadTo(rect.left, rect.bottom, rect.left + r, rect.bottom)
                 path.lineTo(rect.right - r, rect.bottom)
                 path.quadTo(rect.right, rect.bottom, rect.right, rect.bottom - r)
-                path.lineTo(rect.right, rect.top + gap * 2)
+                path.lineTo(rect.right, if (pocketZip) rect.top + gap else rect.top + gap * 2)
                 canvas.drawPath(path, stitch)
                 // ポケットの口を留める、短いかんぬき止め
                 val bx = context.dp(14f)
