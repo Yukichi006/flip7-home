@@ -147,8 +147,6 @@ class HomeActivity : Activity() {
         if (!ready) return
         banner.visibility = if (isDefaultHome()) View.GONE else View.VISIBLE
         refreshModules()
-        // ロック画面の壁紙（ステッチ）を使っていれば、日付が変わったときに描き直す
-        LockArt.refreshIfNeeded(this)
     }
 
     override fun onStop() {
@@ -443,15 +441,11 @@ class HomeActivity : Activity() {
             showBadgeSheet()
             true
         }
-        menu.add(if (LockArt.enabled(this@HomeActivity)) "ロック画面のステッチをやめる" else "ロック画面もステッチにする").setOnMenuItemClickListener {
-            if (LockArt.enabled(this@HomeActivity)) {
-                LockArt.disable(this@HomeActivity)
-                toast("ロック画面の壁紙を元に戻しました")
-            } else {
-                toast("ロック画面の壁紙を描いています…")
-                LockArt.enable(this@HomeActivity) { ok ->
-                    toast(if (ok) "ロック画面をステッチにしました（毎日描き直します）" else "ロック画面の壁紙を設定できませんでした")
-                }
+        menu.add("ロック画面の壁紙を作る…").setOnMenuItemClickListener {
+            toast("ステッチの壁紙を描いています…")
+            LockArt.saveAndOpen(this@HomeActivity) { err ->
+                if (err != null) toast(err)
+                else toast("開いた画面で「ロック画面」を選んで設定してください（ギャラリーの Pictures/FlipHome にも保存しました）")
             }
             true
         }

@@ -219,6 +219,8 @@ class DotCalendarView(
     private val mondayFirst: Boolean,
     private val hasSwipe: (String) -> Boolean,
     private val onSwipe: (String) -> Unit,
+    /** 今日に印を付けるか（ロック画面の壁紙のように、ひと月使い続ける絵では付けない）。 */
+    private val markToday: Boolean = true,
 ) : TickingView(context) {
     private val ring = context.stitch(0.9f, Thread.FAINT)
     private val todayRing = context.stitch(1.2f)
@@ -233,7 +235,7 @@ class DotCalendarView(
 
     override fun onDraw(canvas: Canvas) {
         val cal = Calendar.getInstance()
-        val today = cal.get(Calendar.DAY_OF_MONTH)
+        val today = if (markToday) cal.get(Calendar.DAY_OF_MONTH) else 0
         val days = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
         cal.set(Calendar.DAY_OF_MONTH, 1)
         val firstDow = cal.get(Calendar.DAY_OF_WEEK) // 1 = 日曜
