@@ -19,7 +19,8 @@ import kotlin.math.ceil
 import kotlin.math.min
 
 /**
- * 通知の件数を刺繍した布タグ（生成りの布に黒い糸の数字、10 件以上は「9+」）を描く。
+ * 通知の件数を刺繍した布タグ（オレンジの布に黒い糸の数字、10 件以上は「9+」）を描く。
+ * オレンジは、通知が来たパッドの縁の糸と同じ色。
  * ([x], [y]) は、タグを吊るす糸の付け根。[swing] だけ傾けてぶら下げる。
  */
 fun drawCountTag(canvas: Canvas, context: Context, x: Float, y: Float, count: Int, swing: Float = 0f) {
@@ -34,7 +35,7 @@ fun drawCountTag(canvas: Canvas, context: Context, x: Float, y: Float, count: In
     val w = (num.measureText(text) + context.dp(9f)).coerceAtLeast(context.dp(17f))
     val h = context.dp(15f)
     val body = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Thread.COLOR
+        color = Thread.ALERT
         setShadowLayer(context.dp(2.5f), 0f, context.dp(1.5f), 0xC0000000.toInt())
     }
     val edge = stitchPaint(context.dp(0.8f), context.dp(2f), context.dp(1.6f), 0x66000000)
