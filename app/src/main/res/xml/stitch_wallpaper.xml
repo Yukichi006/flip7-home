@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- ロック画面用の動く壁紙（刺繍のアナログ時計と月のカレンダー） -->
-<wallpaper xmlns:android="http://schemas.android.com/apk/res/android"
-    android:description="@string/wallpaper_description"
-    android:thumbnail="@mipmap/ic_launcher" />

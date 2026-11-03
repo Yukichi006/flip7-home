@@ -1,5 +1,3 @@
 <resources>
     <string name="app_name">FlipHome</string>
-    <string name="wallpaper_name">FlipHome の刺繍</string>
-    <string name="wallpaper_description">黒い布地に、刺繍のアナログ時計と月のカレンダー。時計の針は本物の時刻で進み、カレンダーは毎日変わります。</string>
 </resources>

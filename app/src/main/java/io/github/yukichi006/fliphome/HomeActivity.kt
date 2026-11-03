@@ -165,6 +165,8 @@ class HomeActivity : Activity() {
         if (!ready) return
         banner.visibility = if (isDefaultHome()) View.GONE else View.VISIBLE
         refreshModules()
+        // ロック画面の刺繍の壁紙が、今日の分になっているか（電源を入れ直して予約が消えたときなど）
+        LockArt.refreshIfNeeded(this)
     }
 
     override fun onStop() {
@@ -595,11 +597,22 @@ class HomeActivity : Activity() {
             showBadgeSheet()
             true
         }
-        menu.add("ロック画面の動く壁紙を設定する…").setOnMenuItemClickListener {
-            openLiveWallpaper()
-            true
+        if (LockArt.enabled(this@HomeActivity)) {
+            menu.add("ロック画面の刺繍の壁紙をやめる").setOnMenuItemClickListener {
+                LockArt.disable(this@HomeActivity)
+                toast("ロック画面の壁紙を、ホーム画面と同じ壁紙に戻しました")
+                true
+            }
+        } else {
+            menu.add("ロック画面の壁紙を刺繍にする（毎日自動で更新）").setOnMenuItemClickListener {
+                toast("ステッチの壁紙を描いています…")
+                LockArt.enable(this@HomeActivity) { ok ->
+                    toast(if (ok) "ロック画面の壁紙を設定しました。日付が変わるたびに描き直します" else "ロック画面の壁紙を設定できませんでした")
+                }
+                true
+            }
         }
-        menu.add("ロック画面の壁紙（静止画）を作る…").setOnMenuItemClickListener {
+        menu.add("ロック画面の壁紙を保存して自分で設定する…").setOnMenuItemClickListener {
             toast("ステッチの壁紙を描いています…")
             LockArt.saveAndOpen(this@HomeActivity) { err ->
                 if (err != null) toast(err)
@@ -1031,19 +1044,6 @@ class HomeActivity : Activity() {
         store.setIconTraced(app.key, traced)
         done()
         if (drawer.visibility == View.VISIBLE) drawer.rebuild()
-    }
-
-    /**
-     * 動く壁紙（刺繍の時計とカレンダー）を選ぶ画面を開く。Galaxy の画面で「ロック画面」を選んで設定してもらう。
-     * 刺繍の時計と重ならないよう、Galaxy の時計は小さい形にして上に寄せてもらう。
-     */
-    private fun openLiveWallpaper() {
-        val direct = Intent(android.app.WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
-            .putExtra(android.app.WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, android.content.ComponentName(this, StitchWallpaper::class.java))
-        val ok = runCatching { startActivity(direct) }.isSuccess ||
-            runCatching { startActivity(Intent(android.app.WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER)) }.isSuccess
-        if (ok) toast("開いた画面で「ロック画面」を選んで設定してください。Galaxy の時計は、小さい形にして上に寄せると重なりません")
-        else toast("動く壁紙の画面を開けませんでした")
     }
 
     private fun versionName() =

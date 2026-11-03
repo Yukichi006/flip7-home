@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- 明るさのフェーダーで、画面の明るさを変える（「システム設定の変更」で許可したときだけ） -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <!-- ロック画面の壁紙を刺繍の絵にし、日付が変わるたびに描き直す（設定でオンにしたときだけ。ほかの壁紙は読まない） -->
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <!-- 下へスワイプで通知を開く -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
 
@@ -15,9 +17,6 @@
          geocoding-api.open-meteo.com）だけで、送るのは選んだ地点の緯度・経度と、地点を探すときの地名だけ。
          暗号化しない通信（http）は network_security_config で禁止している -->
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <!-- 動く壁紙を使える端末でなくても、インストールできるようにする -->
-    <uses-feature android:name="android.software.live_wallpaper" android:required="false" />
 
     <queries>
         <!-- ホーム画面とアプリ一覧に、インストール済みのアプリを並べる -->
@@ -80,19 +79,9 @@
             </intent-filter>
         </service>
 
-        <!-- ロック画面用の動く壁紙（刺繍のアナログ時計とカレンダー）。BIND_WALLPAPER はアプリが求める権限ではなく、
-             壁紙を動かす端末の仕組みだけがこの壁紙を呼び出せるようにするための鍵 -->
-        <service
-            android:name=".StitchWallpaper"
-            android:exported="true"
-            android:label="@string/wallpaper_name"
-            android:permission="android.permission.BIND_WALLPAPER">
-            <intent-filter>
-                <action android:name="android.service.wallpaper.WallpaperService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.service.wallpaper"
-                android:resource="@xml/stitch_wallpaper" />
-        </service>
+        <!-- 日付が変わったときに、ロック画面の刺繍の壁紙を今日の分に描き直す（自分のアプリからの予約だけを受ける） -->
+        <receiver
+            android:name=".LockArt$MidnightReceiver"
+            android:exported="false" />
     </application>
 </manifest>
