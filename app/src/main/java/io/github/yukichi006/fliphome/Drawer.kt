@@ -109,22 +109,47 @@ class DrawerView(
         drawScreenSeam(canvas, seam)
     }
 
+    /** 右から出てきて、右へスワイプで閉じる（片手の画面の 2 ページ目）。false なら下から出て、下へ引いて閉じる。 */
+    var fromRight = false
+
+    /** 検索欄を下に置く（親指が届くように）。 */
+    var searchAtBottom = false
+        set(value) {
+            field = value
+            applyInsets(insetTop, insetBottom)
+        }
+
     fun applyInsets(top: Int, bottom: Int) {
         insetTop = top
         insetBottom = bottom
         val side = context.dpi(10f)
         val searchH = context.dpi(64f)
         val railW = context.dpi(46f)
-        val listTop = top + context.dpi(6f) + searchH + context.dpi(4f)
-        searchPatch.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, searchH).apply {
-            setMargins(side, top + context.dpi(6f), side, 0)
-        }
-        list.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
-            setMargins(side + context.dpi(6f), listTop, side + railW + context.dpi(4f), 0)
-        }
-        list.setPadding(0, 0, 0, bottom + context.dpi(12f))
-        rail.layoutParams = LayoutParams(railW, LayoutParams.MATCH_PARENT, Gravity.END).apply {
-            setMargins(0, listTop, side, bottom + context.dpi(10f))
+        val gap = context.dpi(6f)
+        if (searchAtBottom) {
+            searchPatch.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, searchH, Gravity.BOTTOM).apply {
+                setMargins(side, 0, side, bottom + gap)
+            }
+            val listBottom = bottom + gap + searchH + context.dpi(4f)
+            list.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+                setMargins(side + gap, top + gap, side + railW + context.dpi(4f), listBottom)
+            }
+            list.setPadding(0, 0, 0, context.dpi(12f))
+            rail.layoutParams = LayoutParams(railW, LayoutParams.MATCH_PARENT, Gravity.END).apply {
+                setMargins(0, top + gap, side, listBottom)
+            }
+        } else {
+            val listTop = top + gap + searchH + context.dpi(4f)
+            searchPatch.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, searchH).apply {
+                setMargins(side, top + gap, side, 0)
+            }
+            list.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+                setMargins(side + gap, listTop, side + railW + context.dpi(4f), 0)
+            }
+            list.setPadding(0, 0, 0, bottom + context.dpi(12f))
+            rail.layoutParams = LayoutParams(railW, LayoutParams.MATCH_PARENT, Gravity.END).apply {
+                setMargins(0, listTop, side, bottom + context.dpi(10f))
+            }
         }
         requestLayout()
     }
@@ -153,6 +178,7 @@ class DrawerView(
         if (search.text.isNotEmpty()) search.setText("") else rebuild()
         list.setSelection(0)
         translationY = 0f
+        translationX = 0f
     }
 
     fun hideKeyboard() {
@@ -193,9 +219,16 @@ class DrawerView(
             }
             MotionEvent.ACTION_MOVE -> {
                 velocity?.addMovement(ev)
+                val dx = ev.rawX - downX
                 val dy = ev.rawY - downY
                 val onRail = ev.x >= rail.left
-                if (!onRail && dy > slop && dy > abs(ev.rawX - downX) * 1.5f && !list.canScrollVertically(-1)) {
+                if (fromRight) {
+                    // 右へスワイプで閉じる（索引をなぞっているときは除く）
+                    if (!onRail && dx > slop && dx > abs(dy) * 1.5f) {
+                        dragging = true
+                        hideKeyboard()
+                    }
+                } else if (!onRail && dy > slop && dy > abs(dx) * 1.5f && !list.canScrollVertically(-1)) {
                     dragging = true
                     hideKeyboard()
                 }
@@ -208,12 +241,16 @@ class DrawerView(
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         velocity?.addMovement(ev)
         when (ev.actionMasked) {
-            MotionEvent.ACTION_MOVE -> if (dragging) translationY = (ev.rawY - downY).coerceAtLeast(0f)
+            MotionEvent.ACTION_MOVE -> if (dragging) {
+                if (fromRight) translationX = (ev.rawX - downX).coerceAtLeast(0f)
+                else translationY = (ev.rawY - downY).coerceAtLeast(0f)
+            }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 velocity?.computeCurrentVelocity(1000)
-                val vy = velocity?.yVelocity ?: 0f
-                if (dragging && (translationY > height * 0.2f || vy > context.dp(900f))) onClose()
-                else animate().translationY(0f).setDuration(180).start()
+                val v = if (fromRight) velocity?.xVelocity ?: 0f else velocity?.yVelocity ?: 0f
+                val moved = if (fromRight) translationX / width else translationY / height
+                if (dragging && (moved > 0.2f || v > context.dp(900f))) onClose()
+                else animate().translationX(0f).translationY(0f).setDuration(180).start()
                 dragging = false
             }
         }

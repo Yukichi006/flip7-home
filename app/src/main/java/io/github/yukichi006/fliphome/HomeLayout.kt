@@ -241,6 +241,73 @@ class LayoutStore(context: Context) {
         get() = prefs.getFloat("thread", 1f)
         set(value) = prefs.edit().putFloat("thread", value).apply()
 
+    // ------------------------------------------------------------------
+    // 片手の画面（左に情報の列、右にめくれるアプリのパネル）
+    // ------------------------------------------------------------------
+
+    /** 片手の画面にしているか（false ならマス目の画面）。最初は片手の画面。 */
+    var thumbMode: Boolean
+        get() = prefs.getBoolean("thumbMode", true)
+        set(value) = prefs.edit().putBoolean("thumbMode", value).apply()
+
+    /** アプリのパネルをめくり始める側（最初は左下から右上へ）。 */
+    var bookPeel: PeelFrom
+        get() = PeelFrom.entries.firstOrNull { it.key == prefs.getString("bookPeel", null) } ?: PeelFrom.BOTTOM_LEFT
+        set(value) = prefs.edit().putString("bookPeel", value.key).apply()
+
+    var thumb: Thumb
+        get() = prefs.getString(KEY_THUMB, null)?.let { runCatching { Thumb.fromJson(JSONObject(it)) }.getOrNull() }
+            ?: thumbFromHome().also { thumb = it }
+        set(value) = prefs.edit().putString(KEY_THUMB, value.toJson().toString()).apply()
+
+    /** 左の情報の列（1 列 × [Thumb.LEFT_ROWS] 行）。 */
+    fun leftBoard() = Board(1, Thumb.LEFT_ROWS, { thumb.left.modules }, { list -> thumb = thumb.copy(left = Page(list)) }, ::newId)
+
+    /** 右のパネルの [index] 枚目の布（[Thumb.COLS] 列 × 行）。 */
+    fun sheetBoard(index: Int) = Board(Thumb.COLS, thumb.rows, { thumb.sheets.getOrNull(index)?.modules.orEmpty() }, { list ->
+        val t = thumb
+        if (index in t.sheets.indices) thumb = t.copy(sheets = t.sheets.mapIndexed { i, p -> if (i == index) Page(list) else p })
+    }, ::newId)
+
+    /** マス目の画面の [page] ページ目。 */
+    fun gridBoard(page: Int) = Board(home.cols, home.rows, { modules(page) }, { list -> updatePage(page) { list } }, ::newId)
+
+    fun addSheet(after: Int): Int {
+        val t = thumb
+        val at = (after + 1).coerceIn(0, t.sheets.size)
+        thumb = t.copy(sheets = t.sheets.toMutableList().apply { add(at, Page(emptyList())) })
+        return at
+    }
+
+    fun removeSheet(index: Int) {
+        val t = thumb
+        if (t.sheets.size <= 1) return
+        thumb = t.copy(sheets = t.sheets.filterIndexed { i, _ -> i != index })
+    }
+
+    /** 片手の画面を、今のマス目の画面から作る：情報は時計・カレンダー・天気・電池、アプリは右のパネルへ順に。 */
+    private fun thumbFromHome(): Thumb {
+        val h = home
+        val weather = h.pages.flatMap { it.modules }.firstOrNull { it.type == ModuleType.WEATHER }?.props.orEmpty()
+        val left = listOf(
+            Module(newId(), ModuleType.CLOCK, 0, 0, 1, 1),
+            Module(newId(), ModuleType.CALENDAR, 0, 1, 1, 1),
+            Module(newId(), ModuleType.WEATHER, 0, 2, 1, 1, weather),
+            Module(newId(), ModuleType.BATTERY, 0, 3, 1, 1),
+        )
+        val apps = (h.pages.flatMap { p -> p.modules.filter { it.type == ModuleType.APP || it.type == ModuleType.FOLDER }.sortedWith(compareBy({ it.row }, { it.col })) } +
+            h.dock.filterNotNull().map { Module(0, ModuleType.APP, 0, 0, 1, 1, mapOf(Module.P_APP to it)) })
+            .distinctBy { it[Module.P_APP] ?: "folder:${it.id}" }
+        val rows = Thumb.DEFAULT_ROWS
+        val perSheet = Thumb.COLS * rows
+        val sheets = apps.chunked(perSheet).map { chunk ->
+            // アプリが少ない布は、親指の届く下の段から詰める
+            val skip = rows - (chunk.size + Thumb.COLS - 1) / Thumb.COLS
+            Page(chunk.mapIndexed { i, m -> m.copy(id = newId(), col = i % Thumb.COLS, row = skip + i / Thumb.COLS, w = 1, h = 1) })
+        }.ifEmpty { listOf(Page(emptyList())) }
+        return Thumb(Page(left), sheets, rows)
+    }
+
     /** アプリの名前の付け替え。付け替えていなければ null。 */
     fun nameOf(key: String): String? = prefs.getString("name:$key", null)
 
@@ -283,6 +350,7 @@ class LayoutStore(context: Context) {
         const val MIN_ROWS = 4
         const val MAX_ROWS = 12
         private const val KEY_HOME = "home2"
+        private const val KEY_THUMB = "thumb"
         private const val KEY_SEQ = "seq"
 
         /** [m] がマス目の中に収まり、[ignore] 以外のどの部品とも重ならないか。 */
@@ -291,6 +359,72 @@ class LayoutStore(context: Context) {
                 m.col + m.w <= home.cols && m.row + m.h <= home.rows &&
                 list.none { it.id != ignore?.id && it.overlaps(m) }
     }
+}
+
+/** 片手の画面の配置：左の情報の列（[left]）と、右のパネルの布（[sheets]、1 枚ずつめくる）。 */
+data class Thumb(val left: Page, val sheets: List<Page>, val rows: Int) {
+    fun toJson(): JSONObject = JSONObject().apply {
+        put("rows", rows)
+        put("left", JSONObject().put("modules", JSONArray(left.modules.map { it.toJson() })))
+        put("sheets", JSONArray(sheets.map { p -> JSONObject().put("modules", JSONArray(p.modules.map { it.toJson() })) }))
+    }
+
+    companion object {
+        const val COLS = 3
+        const val LEFT_ROWS = 4
+        const val DEFAULT_ROWS = 8
+
+        private fun page(o: JSONObject?): Page {
+            val ms = o?.optJSONArray("modules") ?: return Page(emptyList())
+            return Page((0 until ms.length()).mapNotNull { Module.fromJson(ms.getJSONObject(it)) })
+        }
+
+        fun fromJson(o: JSONObject): Thumb {
+            val sheets = o.optJSONArray("sheets")?.let { a -> (0 until a.length()).map { page(a.getJSONObject(it)) } }.orEmpty()
+            return Thumb(page(o.optJSONObject("left")), sheets.ifEmpty { listOf(Page(emptyList())) },
+                o.optInt("rows", DEFAULT_ROWS).coerceIn(LayoutStore.MIN_ROWS, LayoutStore.MAX_ROWS))
+        }
+    }
+}
+
+/**
+ * 部品を置く盤（マス目の画面の 1 ページ、片手の画面の左の列、右のパネルの 1 枚）。
+ * どの盤でも、置く・置き換える・外すを同じやり方でできるようにする。
+ */
+class Board(
+    val cols: Int,
+    val rows: Int,
+    private val read: () -> List<Module>,
+    private val write: (List<Module>) -> Unit,
+    private val newId: () -> Long,
+) {
+    fun modules(): List<Module> = read()
+
+    private fun fits(list: List<Module>, m: Module) =
+        m.col >= 0 && m.row >= 0 && m.col + m.w <= cols && m.row + m.h <= rows && list.none { it.id != m.id && it.overlaps(m) }
+
+    /** [type] の部品を [col], [row] に置く。最初の大きさが入らなければ、入るところまで小さくする。 */
+    fun placeAt(type: ModuleType, col: Int, row: Int, props: Map<String, String> = emptyMap()): Module? {
+        val list = read()
+        for (hh in minOf(type.h, rows) downTo 1) for (ww in minOf(type.w, cols) downTo 1) {
+            val m = Module(-1, type, col, row, ww, hh, props)
+            if (fits(list, m)) return m.copy(id = newId()).also { write(list + it) }
+        }
+        return null
+    }
+
+    /** [type] の部品を、空いているいちばん上・左に置く。 */
+    fun add(type: ModuleType, props: Map<String, String> = emptyMap()): Module? {
+        val list = read()
+        for (r in 0 until rows) for (c in 0 until cols) {
+            if (list.none { it.covers(c, r) }) placeAt(type, c, r, props)?.let { return it }
+        }
+        return null
+    }
+
+    fun replace(new: Module) = write(read().map { if (it.id == new.id) new else it })
+
+    fun remove(m: Module) = write(read().filter { it.id != m.id })
 }
 
 /**
@@ -334,14 +468,24 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
     private val badge = BadgePainter(context)
     private val rect = RectF()
 
+    /** マスの高さを、幅のこの倍までにする（0 なら入れ物いっぱいに広げる）。余った高さは上に空ける。 */
+    var maxCellRatio = 0f
+        set(value) { field = value; requestLayout() }
+
     private fun cellW() = width.toFloat() / cols
-    private fun cellH() = height.toFloat() / rows
+    private fun cellH(w: Int = width, h: Int = height): Float {
+        val full = h.toFloat() / rows
+        return if (maxCellRatio > 0f) minOf(full, w.toFloat() / cols * maxCellRatio) else full
+    }
+
+    /** マス目の上の余白（マスの高さに上限があるときは、下に寄せて親指が届くようにする）。 */
+    private fun gridTop() = (height - cellH() * rows).coerceAtLeast(0f)
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val h = MeasureSpec.getSize(heightMeasureSpec)
         val cw = w.toFloat() / cols
-        val ch = h.toFloat() / rows
+        val ch = cellH(w, h)
         for (i in 0 until childCount) {
             val child = getChildAt(i)
             val m = (child.layoutParams as Params).module
@@ -362,7 +506,7 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
             val child = getChildAt(i)
             val m = (child.layoutParams as Params).module
             val x = (m.col * cw).toInt()
-            val y = (m.row * ch).toInt()
+            val y = (gridTop() + m.row * ch).toInt()
             // はみ出した部品は、画面の外に置いて見えなくする（表示・非表示の切り替えはしない）
             if (inside(m)) child.layout(x, y, x + child.measuredWidth, y + child.measuredHeight)
             else child.layout(-child.measuredWidth * 2, 0, -child.measuredWidth, child.measuredHeight)
@@ -376,7 +520,8 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
 
     private fun cellRect(col: Int, row: Int, w: Int, h: Int, out: RectF) {
         val pad = context.dp(4f)
-        out.set(col * cellW() + pad, row * cellH() + pad, (col + w) * cellW() - pad, (row + h) * cellH() - pad)
+        val top = gridTop()
+        out.set(col * cellW() + pad, top + row * cellH() + pad, (col + w) * cellW() - pad, top + (row + h) * cellH() - pad)
     }
 
     private fun badgeOffset() = context.dp(BadgePainter.R_DP) * 0.3f
@@ -434,8 +579,8 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
 
     private fun cellAt(x: Float, y: Float): Pair<Int, Int>? {
         val c = (x / cellW()).toInt()
-        val r = (y / cellH()).toInt()
-        return if (c in 0 until cols && r in 0 until rows && x >= 0 && y >= 0) c to r else null
+        val r = ((y - gridTop()) / cellH()).toInt()
+        return if (c in 0 until cols && r in 0 until rows && x >= 0 && y >= gridTop()) c to r else null
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -477,7 +622,7 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
                     val all = list.map { it.second }
                     val target = if (resizing) {
                         val w = ((ev.x - m.col * cellW()) / cellW()).roundToInt().coerceIn(1, cols - m.col)
-                        val h = ((ev.y - m.row * cellH()) / cellH()).roundToInt().coerceIn(1, rows - m.row)
+                        val h = ((ev.y - gridTop() - m.row * cellH()) / cellH()).roundToInt().coerceIn(1, rows - m.row)
                         m.copy(w = w, h = h)
                     } else {
                         v.translationX = dx
