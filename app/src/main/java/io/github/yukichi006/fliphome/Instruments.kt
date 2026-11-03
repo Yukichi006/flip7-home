@@ -225,6 +225,11 @@ class DotCalendarView(
     private val showMonth: Boolean = true,
 ) : TickingView(context) {
     private val month = context.threadText(9.5f, bold = true, color = Thread.DIM).apply { letterSpacing = 0.08f }
+    private val weekendText = context.threadText(9f, color = Thread.ALERT).apply { textAlign = Paint.Align.CENTER }
+    private val weekendKnot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Thread.ALERT
+        setShadowLayer(context.dp(0.8f), 0f, context.dp(1f), Thread.SHADOW)
+    }
     private val dayNum = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textAlign = Paint.Align.CENTER
         typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
@@ -259,7 +264,13 @@ class DotCalendarView(
         val ch = (height - pad - top - headH) / weeks
         val r = (min(cw, ch) * 0.3f).coerceAtMost(context.dp(10f))
         val names = if (mondayFirst) "月火水木金土日" else "日月火水木金土"
-        for (i in 0 until 7) canvas.drawText(names[i].toString(), pad + cw * (i + 0.5f), top + week.textSize, week)
+        // 土日の見出しは、通知と同じオレンジで
+        for (i in 0 until 7) {
+            val nm = names[i]
+            canvas.drawText(nm.toString(), pad + cw * (i + 0.5f), top + week.textSize, if (nm == '土' || nm == '日') weekendText else week)
+        }
+        val year = cal.get(Calendar.YEAR)
+        val monthNo = cal.get(Calendar.MONTH) + 1
         for (cell in 0 until weeks * 7) {
             val day = cell - lead + 1
             val cx = pad + cw * (cell % 7 + 0.5f)
@@ -267,17 +278,20 @@ class DotCalendarView(
             val dot = when {
                 day < 1 || day > days -> { canvas.drawCircle(cx, cy, r * 0.75f, ring); 0f }
                 day == today -> {
-                    canvas.drawCircle(cx, cy, r * 1.05f, knot)
+                    canvas.drawCircle(cx, cy, r * 1.05f, if (offDay(cell, year, monthNo, day)) weekendKnot else knot)
                     canvas.drawCircle(cx, cy, r * 1.6f, todayRing)
                     r * 1.05f
                 }
                 else -> {
+                    // 土日・祝日の玉は、通知と同じオレンジの糸で
+                    val paint = if (offDay(cell, year, monthNo, day)) weekendKnot else knot
                     val rr = r * if (day < today) 0.85f else 1f
-                    canvas.drawCircle(cx, cy, rr, knot.apply { alpha = if (day < today) 150 else 255 })
+                    canvas.drawCircle(cx, cy, rr, paint.apply { alpha = if (day < today) 150 else 255 })
                     rr
                 }
             }
             knot.alpha = 255
+            weekendKnot.alpha = 255
             // 糸の玉の中に、日付をささやかに（布の色で抜く）
             if (dot > 0f) {
                 dayNum.textSize = dot * 1.0f
@@ -285,6 +299,14 @@ class DotCalendarView(
                 canvas.drawText(day.toString(), cx, cy - (dayNum.ascent() + dayNum.descent()) / 2, dayNum)
             }
         }
+    }
+
+    /** マス [cell]（その月の [day] 日）が、土日か祝日か。 */
+    private fun offDay(cell: Int, year: Int, month: Int, day: Int): Boolean {
+        val col = cell % 7
+        val sun = if (mondayFirst) col == 6 else col == 0
+        val sat = if (mondayFirst) col == 5 else col == 6
+        return sun || sat || Holidays.isHoliday(year, month, day)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -361,6 +383,17 @@ class ZipperFader(
         override fun onReceive(c: Context, i: Intent) { if (!dragging) { readValue(); invalidate() } }
     }
 
+    /** 明るさが「自動」か（クイック設定で切り替えても、すぐに表示を変える）。 */
+    private fun autoBrightness() = function == "brightness" && runCatching {
+        Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE) == Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC
+    }.getOrDefault(false)
+
+    private val brightnessObserver = object : android.database.ContentObserver(android.os.Handler(android.os.Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) { if (!dragging) { readValue(); invalidate() } }
+    }
+    private val autoStitch = context.stitch(1.1f, Thread.ALERT)
+    private val autoText = context.threadText(10f, bold = true, color = Thread.ALERT).apply { textAlign = Paint.Align.CENTER; letterSpacing = 0.15f }
+
     init {
         contentDescription = label
         readValue()
@@ -369,11 +402,16 @@ class ZipperFader(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         if (function == "volume") context.registerReceiver(volumeReceiver, IntentFilter("android.media.VOLUME_CHANGED_ACTION"), Context.RECEIVER_EXPORTED)
+        if (function == "brightness") runCatching {
+            context.contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS_MODE), false, brightnessObserver)
+            context.contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS), false, brightnessObserver)
+        }
         readValue()
     }
 
     override fun onDetachedFromWindow() {
         if (function == "volume") runCatching { context.unregisterReceiver(volumeReceiver) }
+        if (function == "brightness") runCatching { context.contentResolver.unregisterContentObserver(brightnessObserver) }
         super.onDetachedFromWindow()
     }
 
@@ -507,11 +545,14 @@ class ZipperFader(
         val ph = context.dp(20f)
         val body = RectF(cx - pw / 2, pullY - ph / 2, cx + pw / 2, pullY + ph / 2)
         val tab = RectF(cx - pw * 0.28f, body.bottom - context.dp(3f), cx + pw * 0.28f, body.bottom + context.dp(13f))
+        // 明るさが「自動」のときは、引き手の縫い目をオレンジにし、下の文字を「AUTO」にする
+        val auto = autoBrightness()
+        val ps = if (auto) autoStitch else pullStitch
         canvas.drawRoundRect(tab, context.dp(5f), context.dp(5f), pullFill)
-        canvas.drawRoundRect(RectF(tab.left + context.dp(2.5f), tab.top + context.dp(4f), tab.right - context.dp(2.5f), tab.bottom - context.dp(2.5f)), context.dp(3f), context.dp(3f), pullStitch)
+        canvas.drawRoundRect(RectF(tab.left + context.dp(2.5f), tab.top + context.dp(4f), tab.right - context.dp(2.5f), tab.bottom - context.dp(2.5f)), context.dp(3f), context.dp(3f), ps)
         canvas.drawRoundRect(body, context.dp(6f), context.dp(6f), pullFill)
-        canvas.drawRoundRect(RectF(body.left + context.dp(2.5f), body.top + context.dp(2.5f), body.right - context.dp(2.5f), body.bottom - context.dp(2.5f)), context.dp(4f), context.dp(4f), pullStitch)
-        canvas.drawText(label, cx, height - patch.margin - context.dp(10f), text)
+        canvas.drawRoundRect(RectF(body.left + context.dp(2.5f), body.top + context.dp(2.5f), body.right - context.dp(2.5f), body.bottom - context.dp(2.5f)), context.dp(4f), context.dp(4f), ps)
+        canvas.drawText(if (auto) "AUTO" else label, cx, height - patch.margin - context.dp(10f), if (auto) autoText else text)
     }
 }
 
@@ -534,26 +575,7 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
 
     private val callback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) = invalidate()
-        override fun onPlaybackStateChanged(state: PlaybackState?) {
-            if (isPlaying()) lastPlaying = System.currentTimeMillis()
-            invalidate()
-            // 一時停止してから 1 分たったら消す
-            postDelayed({ invalidate() }, PAUSE_KEEP_MS + 100)
-        }
-    }
-
-    /** 最後に再生していた時刻（一時停止のすぐあとは、続きを再生できるよう出しておく）。 */
-    private var lastPlaying = 0L
-
-    private fun isPlaying() = controller?.playbackState?.state.let {
-        it == PlaybackState.STATE_PLAYING || it == PlaybackState.STATE_BUFFERING
-    }
-
-    // 許可がないときは「許可して」と出す。許可があれば、再生している（一時停止して 1 分以内）ときだけ出す
-    override fun hidden(): Boolean {
-        if (!Badges.enabled(context)) return false
-        if (isPlaying()) { lastPlaying = System.currentTimeMillis(); return false }
-        return controller?.metadata == null || System.currentTimeMillis() - lastPlaying > PAUSE_KEEP_MS
+        override fun onPlaybackStateChanged(state: PlaybackState?) = invalidate()
     }
     private val sessions = MediaSessionManager.OnActiveSessionsChangedListener { list -> attach(list?.firstOrNull()) }
 
@@ -588,6 +610,7 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
         }
         val c = controller
         val meta = c?.metadata
+        // 再生していないときは、曲名を書かない（枠とボタンだけ）
         val title = meta?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: ""
         val artist = meta?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
         val playing = c?.playbackState?.state == PlaybackState.STATE_PLAYING
@@ -626,8 +649,6 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        // 出していないときは、ホーム画面のスワイプなどに任せる
-        if (hidden()) return false
         if (event.actionMasked == MotionEvent.ACTION_UP) {
             if (!Badges.enabled(context)) { needAccess(); return true }
             val t = controller?.transportControls
@@ -642,10 +663,5 @@ class MediaView(context: Context, private val needAccess: () -> Unit) : PatchVie
         }
         super.onTouchEvent(event)
         return true
-    }
-
-    companion object {
-        /** 一時停止してから、出しておく時間。 */
-        private const val PAUSE_KEEP_MS = 60_000L
     }
 }

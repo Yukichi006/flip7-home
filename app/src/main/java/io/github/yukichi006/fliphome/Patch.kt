@@ -137,11 +137,7 @@ abstract class PatchView(context: Context, shape: PatchPainter.Shape = PatchPain
     var framed = true
         set(value) { field = value; invalidate() }
 
-    /** 今は何も描かないか（再生中の曲が、再生していないときなど）。 */
-    protected open fun hidden() = false
-
     final override fun onDraw(canvas: Canvas) {
-        if (hidden()) return
         if (framed) patch.draw(canvas, width, height)
         val p = if (framed) patch.contentPadding else context.dp(4f)
         val alpha = Sewing.contentAlpha()
