@@ -612,6 +612,16 @@ class HomeActivity : Activity() {
                 true
             }
         }
+        menu.add("ロック画面の壁紙の状態を調べる").setOnMenuItemClickListener {
+            android.app.AlertDialog.Builder(this@HomeActivity)
+                .setTitle("ロック画面の壁紙")
+                .setMessage(LockArt.describe(this@HomeActivity) +
+                    "\n\nロック画面がほかのアプリの「動く壁紙」になっていると、FlipHome の絵より手前に出ます。" +
+                    "Galaxy の「壁紙とスタイル」でロック画面に静止画を選び直してから、もう一度「刺繍にする」を押してください。")
+                .setPositiveButton("閉じる", null)
+                .show()
+            true
+        }
         menu.add("ロック画面の壁紙を保存して自分で設定する…").setOnMenuItemClickListener {
             toast("ステッチの壁紙を描いています…")
             LockArt.saveAndOpen(this@HomeActivity) { err ->

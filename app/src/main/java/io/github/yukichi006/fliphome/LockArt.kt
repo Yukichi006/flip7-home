@@ -72,6 +72,26 @@ object LockArt {
         }
     }
 
+    /**
+     * ロック画面とホーム画面に、どんな壁紙が設定されているかを、人が読める文にする（うまく変わらないときに調べる用）。
+     * 動く壁紙なら、そのアプリの名前とパッケージ名を書く。壁紙の絵そのものは読まない。
+     */
+    fun describe(context: Context): String {
+        val wm = WallpaperManager.getInstance(context)
+        val pm = context.packageManager
+        fun live(which: Int): String? {
+            val info = runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= 34) wm.getWallpaperInfo(which) else if (which == WallpaperManager.FLAG_SYSTEM) wm.wallpaperInfo else null
+            }.getOrNull() ?: return null
+            return "動く壁紙「${runCatching { info.loadLabel(pm) }.getOrDefault("?")}」（${info.packageName}）"
+        }
+        val lockId = runCatching { wm.getWallpaperId(WallpaperManager.FLAG_LOCK) }.getOrDefault(-1)
+        val lock = live(WallpaperManager.FLAG_LOCK) ?: if (lockId > 0) "静止画（番号 $lockId）" else "ホーム画面と同じ"
+        val home = live(WallpaperManager.FLAG_SYSTEM) ?: "静止画"
+        val auto = if (enabled(context)) "オン（最後に描いた日：${context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("date", null) ?: "まだ"}）" else "オフ"
+        return "ロック画面：$lock\nホーム画面：$home\nFlipHome の自動更新：$auto"
+    }
+
     private fun midnightIntent(context: Context): PendingIntent =
         PendingIntent.getBroadcast(context, 0, Intent(context, MidnightReceiver::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 
