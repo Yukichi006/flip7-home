@@ -18,6 +18,18 @@ import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.min
 
+/** パッドのアプリ名の出し方：2 行まで・1 行だけ・出さない（アイコンだけ）。 */
+enum class PadLabel(val key: String, val label: String) {
+    TWO("two", "出す（長い名前は 2 行）"),
+    ONE("one", "1 行だけ（長い名前は「…」）"),
+    NONE("none", "出さない（アイコンだけ・大きく）"),
+    ;
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: TWO
+    }
+}
+
 /**
  * 通知の件数を刺繍した布タグ（オレンジの布に黒い糸の数字、10 件以上は「9+」）を描く。
  * オレンジは、通知が来たパッドの縁の糸と同じ色。
@@ -117,6 +129,8 @@ class PadView(
     private val second: AppEntry? = null,
     private val framed: Boolean = true,
     private val peel: PeelFrom = PeelFrom.DEFAULT,
+    /** アプリ名の出し方。 */
+    private val labelMode: PadLabel = PadLabel.TWO,
     private val onLongPress: () -> Unit,
 ) : View(context), SewAware {
     private val patch = PatchPainter(context, PatchPainter.Shape.Round(16f))
@@ -319,6 +333,19 @@ class PadView(
         return listOf(first, second)
     }
 
+    /** 1 行に入れる：文字を小さくしていき、それでも入らなければ終わりを「…」にする。文字の大きさは [label] に入れる。 */
+    private fun oneLine(text: String, maxW: Float): CharSequence {
+        var size = context.sp(9.5f)
+        label.textSize = size
+        while (label.measureText(text) > maxW && size > context.sp(7.5f)) {
+            size -= context.sp(0.5f)
+            label.textSize = size
+        }
+        if (label.measureText(text) <= maxW) return text
+        val cut = label.breakText(text, true, (maxW - label.measureText("…")).coerceAtLeast(0f), null)
+        return text.substring(0, cut) + "…"
+    }
+
     /** 待機中に少しだけめくれている深さ（角は犬の耳、辺は細い折り返し）。 */
     private fun restDepth() = if (peel.corner) dp(18f) else dp(7f)
 
@@ -408,14 +435,27 @@ class PadView(
 
     /** アイコンとアプリ名（と通知の印）を描く。 */
     private fun drawFace(canvas: Canvas, shown: AppEntry, withBadge: Boolean) {
-        // 横は縫い目のすぐ内側まで使い、縦は文字の下が縫い目にかからないように少し多めに空ける
+        // 横は縫い目のすぐ内側まで使い、縦は文字の下が縫い目にかからないように少しだけ多めに空ける
         val inner = if (framed) patch.margin + dp(7f) else dp(2f)
-        val innerV = if (framed) patch.seamInset + dp(6f) else dp(2f)
-        val lines = fitLabel(repo.label(shown), width - inner * 2)
+        val innerV = if (framed) patch.seamInset + dp(4f) else dp(2f)
+        // 文字は、左右の縫い目から少し内側に収める
+        val maxW = width - (if (framed) patch.seamInset + dp(5f) else dp(2f)) * 2
+        val roomH = height - innerV * 2
+        fun iconFor(lines: List<CharSequence>): Float {
+            val labelH = if (lines.isEmpty()) 0f else label.textSize * 1.15f * lines.size + label.textSize * 0.3f + dp(3f)
+            return min(width - inner * 2, roomH - labelH).coerceAtMost(if (lines.isEmpty()) dp(56f) else dp(46f))
+        }
+        val name = repo.label(shown)
+        // 選んだ出し方のとおりに：2 行まで（省略しない）・1 行だけ（入らない分は「…」）・出さない
+        val lines: List<CharSequence> = when (labelMode) {
+            PadLabel.NONE -> emptyList()
+            PadLabel.ONE -> listOf(oneLine(name, maxW))
+            PadLabel.TWO -> fitLabel(name, maxW)
+        }
         val lineH = label.textSize * 1.15f
-        val labelH = lineH * lines.size + label.textSize * 0.3f
-        val iconPx = min(width - inner * 2, height - innerV * 2 - labelH - dp(3f)).coerceAtMost(dp(46f)).coerceAtLeast(dp(14f)).toInt()
-        val total = iconPx + dp(3f) + labelH
+        val labelH = if (lines.isEmpty()) 0f else lineH * lines.size + label.textSize * 0.3f
+        val iconPx = iconFor(lines).coerceAtLeast(dp(14f)).toInt()
+        val total = iconPx + (if (lines.isEmpty()) 0f else dp(3f)) + labelH
         val top = (height - total) / 2f
         canvas.drawBitmap(repo.icon(shown, iconPx) { invalidate() }, (width - iconPx) / 2f, top, null)
         lines.forEachIndexed { i, t ->

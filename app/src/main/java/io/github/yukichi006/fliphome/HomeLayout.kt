@@ -93,6 +93,9 @@ data class Module(
         const val P_MINMAX = "minmax"
         const val P_TAP_APP = "tapApp"
 
+        /** パッドのアプリ名：「show」で出す、「hide」で隠す（なければ、全体の設定に合わせる）。 */
+        const val P_LABEL = "label"
+
         /** ステッチの枠：「1」で付ける、「0」でなくす（なければ、部品と画面ごとの決まり）。 */
         const val P_FRAME = "frame"
 
@@ -258,6 +261,11 @@ class LayoutStore(context: Context) {
     // ------------------------------------------------------------------
     // 片手の画面（左に情報の列、右にめくれるアプリのパネル）
     // ------------------------------------------------------------------
+
+    /** パッドのアプリ名の出し方（全体の設定）。 */
+    var padLabel: PadLabel
+        get() = PadLabel.of(prefs.getString("padLabel", null))
+        set(value) = prefs.edit().putString("padLabel", value.key).apply()
 
     /** 下段のポケットの口をファスナーにするか（右へ引くとアプリ一覧）。最初は付ける。 */
     var dockZip: Boolean

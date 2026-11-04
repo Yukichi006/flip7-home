@@ -255,7 +255,7 @@ class HomeActivity : Activity() {
         if (dock.layoutParams.height != h) dock.layoutParams = dock.layoutParams.apply { height = h }
         dock.setCells(home.dock.map { key ->
             if (key == LayoutStore.DRAWER_KEY) DrawerButton(this, onOpen = { openDrawer() }, onLongPress = { enterEdit() })
-            else key?.let { repo.find(it) }?.let { app -> PadView(this, app, repo, framed = false) { enterEdit() } }
+            else key?.let { repo.find(it) }?.let { app -> PadView(this, app, repo, framed = false, labelMode = store.padLabel) { enterEdit() } }
         })
         dock.editing = editing
     }
@@ -308,7 +308,7 @@ class HomeActivity : Activity() {
             ModuleType.BATTERY -> BatteryPatch(this)
             // アンインストールされたアプリ（や一時的に使えない仕事用のアプリ）は表示しないだけで、配置は残す
             ModuleType.APP -> m[Module.P_APP]?.let { repo.find(it) }?.let { app ->
-                PadView(this, app, repo, second = m[Module.P_LONG_APP]?.let { repo.find(it) }, peel = peelFrom) { enterEdit() }
+                PadView(this, app, repo, second = m[Module.P_LONG_APP]?.let { repo.find(it) }, peel = peelFrom, labelMode = padLabelFor(m)) { enterEdit() }
             } ?: return null
             ModuleType.FOLDER -> FolderPouch(this, m[Module.P_NAME] ?: "フォルダ",
                 m.folderApps.mapNotNull { repo.find(it)?.component?.packageName },
@@ -351,6 +351,13 @@ class HomeActivity : Activity() {
             addView(view, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             setOnLongClickListener { enterEdit(); true }
         }
+    }
+
+    /** パッド [m] のアプリ名の出し方（パッドで選んでいればそれ、なければ全体の設定）。 */
+    private fun padLabelFor(m: Module): PadLabel = when (m[Module.P_LABEL]) {
+        "hide" -> PadLabel.NONE
+        "show" -> store.padLabel.takeIf { it != PadLabel.NONE } ?: PadLabel.TWO
+        else -> store.padLabel
     }
 
     /**
@@ -584,6 +591,8 @@ class HomeActivity : Activity() {
         for (p in PeelFrom.entries) {
             peelMenu.add(p.label).setOnMenuItemClickListener { store.peel = p; rebuildHome(); true }
         }
+        val labelMenu = menu.addSubMenu("パッドのアプリ名（いま：${store.padLabel.label}）")
+        for (l in PadLabel.entries) labelMenu.add(l.label).setOnMenuItemClickListener { store.padLabel = l; rebuildHome(); true }
         val threadMenu = menu.addSubMenu("糸の太さ（いま：${StitchStyle.label(store.thread)}）")
         for ((scale, name) in StitchStyle.CHOICES) {
             threadMenu.add(name).setOnMenuItemClickListener {
@@ -850,6 +859,9 @@ class HomeActivity : Activity() {
                 },
             ) + listOfNotNull(
                 second?.let { "裏地のアプリをやめる" to { board().replace(m.with(Module.P_LONG_APP, null)); done() } },
+                // このパッドだけ、名前を隠す・出す
+                if (padLabelFor(m) == PadLabel.NONE) "このパッドのアプリ名を出す" to { board().replace(m.with(Module.P_LABEL, "show")); done() }
+                else "このパッドのアプリ名を隠す（アイコンを大きく）" to { board().replace(m.with(Module.P_LABEL, "hide")); done() },
             ) + appItems(app, s) + pageMoveItems(m) + listOf(
                 "外す" to { board().remove(m); done() },
             ), note = "裏地のアプリを決めると、パッドの端が少しめくれます。そこをつまんでめくると裏地のアプリが見え、めくりきって離すと開きます。めくる向きは「…」→「裏地をめくる向き」で変えられます。"))
