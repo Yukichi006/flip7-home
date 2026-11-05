@@ -14,13 +14,23 @@ import android.view.animation.OvershootInterpolator
 import kotlin.math.abs
 
 /**
- * 下段のポケットの口に付けた、横向きのファスナー。左端の引き手をつまんで右へ引くと、引き手が通ったところが V の字に開き、
- * すき間から裏地とアプリの四角がのぞく。右端の近くまで開いて離すと、アプリ一覧に切り替わる（[onOpen]）。
- * 途中で離すと、引き手は左へ戻ってファスナーが閉じる。タップすると、少しだけ開いて「引ける」ことを知らせる。
+ * 下段のポケットの口に付けた、横向きのファスナー。開き具合が、アプリ一覧の開き具合とつながっている。
+ * - 左端の引き手をつまんで右へ引くと、引き手が通ったところが V の字に開き、そのぶんアプリ一覧が下からせり上がる
+ * - 開ききると、アプリ一覧がファスナーの上まで出る。ファスナーはそのまま残り、左へ引いて閉じると、アプリ一覧も下へ沈んで閉じる
+ * - 途中で離すと、近いほう（開く・閉じる）へ動く。閉じているときにタップすると、少しだけ開いて「引ける」ことを知らせる
  *
+ * 開き具合が変わるたびに [listener] の onZip（0〜1）、開ききった・閉じきったら onZipSettled を呼ぶ。
  * 描くのと指の動きを受けるのは、ポケット（[host]）から呼んでもらう。
  */
-class ZipperTrack(private val host: View, private val onOpen: () -> Unit) {
+class ZipperTrack(private val host: View, private val listener: Listener) {
+    interface Listener {
+        /** 開き具合（0：閉じている〜1：開ききった）が変わったとき（指で引いているときも、動いているときも）。 */
+        fun onZip(value: Float)
+
+        /** 開ききった（[open] が true）・閉じきったとき。 */
+        fun onZipSettled(open: Boolean)
+    }
+
     private val context = host.context
     private val lining = Fabric.paint(context, Cloth.LINING)
     private val dark = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF050505.toInt() }
@@ -49,8 +59,11 @@ class ZipperTrack(private val host: View, private val onOpen: () -> Unit) {
     val pullReach = bodyW * 0.35f + tabW - context.dp(4f)
 
     /** 開き具合（0：閉じている〜1：右端まで開いた）。 */
-    private var value = 0f
-        set(v) { field = v; host.invalidate() }
+    var value = 0f
+        private set(v) { field = v; host.invalidate(); listener.onZip(v) }
+
+    /** ファスナーの上の縁の高さ（ポケットの中の位置。引き手の上まで）。 */
+    val topY: Float get() = cy - th * 1.6f
 
     private var left = 0f
     private var right = 0f
@@ -108,28 +121,43 @@ class ZipperTrack(private val host: View, private val onOpen: () -> Unit) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (!dragging) return false
                 dragging = false
+                val wasOpen = startValue > 0.5f
                 when {
-                    !moved && ev.actionMasked == MotionEvent.ACTION_UP -> nudge()
-                    value > 0.85f -> openAll()
-                    else -> animateTo(0f, 260, DecelerateInterpolator(1.6f))
+                    !moved && ev.actionMasked == MotionEvent.ACTION_UP -> if (!wasOpen) nudge()
+                    // 閉じていたら半分を少し越えれば開き、開いていたら少し閉じれば閉じる
+                    if (wasOpen) value > 0.75f else value > 0.55f -> settle(true)
+                    else -> settle(false)
                 }
             }
         }
         return true
     }
 
-    /** 右端まで開ききってから、アプリ一覧に切り替える。一覧が開いたら、見えないうちに閉じておく。 */
-    private fun openAll() {
-        animateTo(1f, 120, DecelerateInterpolator()) {
-            host.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-            onOpen()
-            host.postDelayed({ value = 0f }, 450)
+    /** 開ききる（[open]）・閉じきるまで動かす。 */
+    private fun settle(open: Boolean) {
+        val target = if (open) 1f else 0f
+        val ms = (260 * abs(target - value)).toLong().coerceAtLeast(90)
+        animateTo(target, ms, DecelerateInterpolator(1.4f)) {
+            if (open) host.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+            listener.onZipSettled(open)
         }
+    }
+
+    /** 外から閉じる（アプリ一覧を戻るボタンなどで閉じたとき）。アプリ一覧もファスナーといっしょに沈む。 */
+    fun close() = settle(false)
+
+    /** 外から開ききった形に戻す（アプリ一覧を少し下げて離したとき）。 */
+    fun reopen() = settle(true)
+
+    /** 外から開き具合を合わせる（アプリ一覧を指で下げたときなど）。 */
+    fun snapTo(v: Float) {
+        anim?.cancel()
+        value = v.coerceIn(0f, 1f)
     }
 
     /** タップされたら、少しだけ開いて閉じる（引けることを知らせる）。 */
     private fun nudge() {
-        animateTo(0.12f, 140, DecelerateInterpolator()) { animateTo(0f, 320, OvershootInterpolator(2.2f)) }
+        animateTo(0.12f, 140, DecelerateInterpolator()) { animateTo(0f, 320, OvershootInterpolator(2.2f)) { listener.onZipSettled(false) } }
     }
 
     private fun animateTo(target: Float, ms: Long, interp: android.animation.TimeInterpolator, end: (() -> Unit)? = null) {

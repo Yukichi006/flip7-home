@@ -127,7 +127,9 @@ class HomeActivity : Activity() {
             column.setPadding(0, bars.top, 0, bars.bottom)
             (editBar.layoutParams as FrameLayout.LayoutParams).topMargin = bars.top
             editBar.requestLayout()
-            drawer.applyInsets(bars.top, max(bars.bottom, ime.bottom))
+            drawerInsetTop = bars.top
+            drawerInsetBottom = max(bars.bottom, ime.bottom)
+            drawer.applyInsets(bars.top, if (zipDrawer) 0 else drawerInsetBottom)
             insets
         }
         setContentView(root)
@@ -264,7 +266,7 @@ class HomeActivity : Activity() {
         dock.visibility = if (home.pocket) View.VISIBLE else View.GONE
         // 口のファスナー：右へ引ききると、アプリ一覧が開く。ファスナーの帯の分だけ、ポケットを高くする
         val zip = store.dockZip
-        if ((dock.zipper != null) != zip) dock.zipper = if (zip) ZipperTrack(dock) { openDrawer() } else null
+        if ((dock.zipper != null) != zip) dock.zipper = if (zip) ZipperTrack(dock, zipLink) else null
         val h = dpi(if (zip) 138f else 124f)
         if (dock.layoutParams.height != h) dock.layoutParams = dock.layoutParams.apply { height = h }
         dock.setCells(home.dock.map { key ->
@@ -1071,7 +1073,82 @@ class HomeActivity : Activity() {
     // アプリ一覧
     // ------------------------------------------------------------------
 
+    // ------------------------------------------------------------------
+    // 下段のファスナーと、アプリ一覧の開閉をつなぐ
+    // ------------------------------------------------------------------
+
+    /** アプリ一覧を、下段のファスナーから出しているか（ファスナーの上まで、下からせり上がる形）。 */
+    private var zipDrawer = false
+
+    private val zipLink = object : ZipperTrack.Listener {
+        override fun onZip(value: Float) {
+            if (value <= 0f && !zipDrawer) return
+            if (!zipDrawer) beginZipDrawer()
+            placeZipDrawer(value)
+        }
+
+        override fun onZipSettled(open: Boolean) {
+            if (!zipDrawer) return
+            if (open) {
+                placeZipDrawer(1f)
+            } else {
+                endZipDrawer()
+            }
+        }
+    }
+
+    /** ファスナーの上の縁の高さ（画面の中の位置）。アプリ一覧は、ここまでの高さで出す（ファスナーは隠さない）。 */
+    private fun zipLineY(): Int {
+        val z = dock.zipper ?: return root.height
+        val loc = IntArray(2); dock.getLocationInWindow(loc)
+        val r = IntArray(2); root.getLocationInWindow(r)
+        return (loc[1] - r[1] + z.topY).toInt()
+    }
+
+    /** ファスナーから出すアプリ一覧の用意：ファスナーの上までの大きさにし、下から出す。 */
+    private fun beginZipDrawer() {
+        zipDrawer = true
+        drawer.animate().cancel()
+        drawer.reset()
+        drawer.fromRight = false
+        if (!drawer.searchAtBottom) drawer.searchAtBottom = true
+        val h = zipLineY()
+        drawer.layoutParams = (drawer.layoutParams as FrameLayout.LayoutParams).apply { height = h; gravity = Gravity.TOP }
+        // 下はファスナーが続くので、ナビゲーションバーの分は空けない
+        drawer.applyInsets(drawerInsetTop, 0)
+        drawer.visibility = View.VISIBLE
+        drawer.translationY = h.toFloat()
+        // アプリ一覧を指で下げたら、ファスナーも閉じていく。離したら、近いほうへ
+        drawer.onPull = { f -> dock.zipper?.snapTo(1f - f) }
+        drawer.onPullEnd = { close -> dock.zipper?.let { z -> if (close) z.close() else z.reopen() } }
+    }
+
+    /** 開き具合 [value] に合わせて、アプリ一覧をファスナーの線からせり上げる（線より下は見せない）。 */
+    private fun placeZipDrawer(value: Float) {
+        val h = drawer.layoutParams.height.takeIf { it > 0 } ?: zipLineY()
+        val ty = h * (1f - value)
+        drawer.translationY = ty
+        drawer.clipBounds = android.graphics.Rect(0, 0, root.width, (h - ty).toInt().coerceAtLeast(0))
+    }
+
+    /** ファスナーを閉じきったら、アプリ一覧を片付けて、いつもの大きさに戻す。 */
+    private fun endZipDrawer() {
+        zipDrawer = false
+        drawer.hideKeyboard()
+        drawer.visibility = View.GONE
+        drawer.clipBounds = null
+        drawer.translationY = 0f
+        drawer.onPull = null
+        drawer.onPullEnd = null
+        drawer.layoutParams = (drawer.layoutParams as FrameLayout.LayoutParams).apply { height = FrameLayout.LayoutParams.MATCH_PARENT }
+        drawer.applyInsets(drawerInsetTop, drawerInsetBottom)
+    }
+
+    private var drawerInsetTop = 0
+    private var drawerInsetBottom = 0
+
     fun openDrawer() {
+        if (zipDrawer) return
         // 右から出す。検索欄は親指の届く下
         val side = true
         drawer.fromRight = side
@@ -1085,6 +1162,16 @@ class HomeActivity : Activity() {
     }
 
     private fun closeDrawer() {
+        // ファスナーから出していたら、ファスナーを閉じる（アプリ一覧もいっしょに沈む）
+        if (zipDrawer) {
+            val z = dock.zipper
+            if (z == null) { endZipDrawer(); return }
+            val h = drawer.layoutParams.height.takeIf { it > 0 } ?: 1
+            // 指で下げていたら、その位置から閉じる
+            z.snapTo(1f - drawer.translationY / h)
+            z.close()
+            return
+        }
         drawer.hideKeyboard()
         val a = drawer.animate().setDuration(200)
         if (drawer.fromRight) a.translationX(root.width.toFloat()) else a.translationY(root.height.toFloat())

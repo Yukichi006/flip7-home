@@ -138,7 +138,14 @@ class DrawerView(
         drawScreenSeam(canvas, seam)
     }
 
-    /** 右から出てきて、右へスワイプで閉じる（片手の画面の 2 ページ目）。false なら下から出て、下へ引いて閉じる。 */
+    /**
+     * 下へ引いたときに、自分で動かずにこれを呼ぶ（引いた割合 0〜1）。下段のファスナーから出しているときに、ファスナーといっしょに動かすため。
+     * 離したら [onPullEnd]（閉じるなら true）。
+     */
+    var onPull: ((Float) -> Unit)? = null
+    var onPullEnd: ((Boolean) -> Unit)? = null
+
+    /** 右から出てきて、右へスワイプで閉じる。false なら下から出て、下へ引いて閉じる。 */
     var fromRight = false
 
     /** 検索欄を下に置く（親指が届くように）。 */
@@ -345,14 +352,19 @@ class DrawerView(
         velocity?.addMovement(ev)
         when (ev.actionMasked) {
             MotionEvent.ACTION_MOVE -> if (dragging) {
+                val pull = onPull
                 if (fromRight) translationX = (ev.rawX - downX).coerceAtLeast(0f)
+                else if (pull != null) pull(((ev.rawY - downY) / height).coerceIn(0f, 1f))
                 else translationY = (ev.rawY - downY).coerceAtLeast(0f)
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 velocity?.computeCurrentVelocity(1000)
                 val v = if (fromRight) velocity?.xVelocity ?: 0f else velocity?.yVelocity ?: 0f
                 val moved = if (fromRight) translationX / width else translationY / height
-                if (dragging && (moved > 0.2f || v > context.dp(900f))) onClose()
+                val close = dragging && (moved > 0.2f || v > context.dp(900f))
+                val pullEnd = onPullEnd
+                if (dragging && !fromRight && pullEnd != null) pullEnd(close)
+                else if (close) onClose()
                 else animate().translationX(0f).translationY(0f).setDuration(180).start()
                 dragging = false
             }
