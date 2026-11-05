@@ -72,16 +72,42 @@ class WidgetCell(context: Context, private val onLongPress: () -> Unit) : FrameL
 
     /**
      * ウィジェットの角を丸める。Android 12 からのウィジェットは、角を自分では丸めず、土台に印（android:id/background）を付けて、
-     * 丸めるのをホームアプリに任せている（Galaxy のホーム画面も丸めている）。印の付いた土台を、Android が決めている丸みで切り取る。
-     * 印がなければ、そのままにする（自分で丸めた絵を描いているウィジェットなど）。
+     * 丸めるのをホームアプリに任せている（Galaxy のホーム画面も丸めている）。土台（[findBackground]）を、Android が決めている丸みで切り取る。
      */
     private fun roundCorners() {
         val host = getChildAt(0) as? android.appwidget.AppWidgetHostView ?: return
-        val bg = host.findViewById<android.view.View>(android.R.id.background) ?: return
+        val bg = findBackground(host) ?: return
         val radius = cornerRadius()
         if (bg.clipToOutline && (bg.outlineProvider as? Rounded)?.radius == radius) return
         bg.outlineProvider = Rounded(radius)
         bg.clipToOutline = true
+    }
+
+    /**
+     * ウィジェットの土台を探す（ふつうの Android のホーム画面と同じ考え方）。
+     * 1. 土台の印（android:id/background）が付いた部品
+     * 2. 中に部品が 1 つずつしかない入れ子なら、背景を持つ最初の部品
+     * 3. 背景を持つ部品のうち、いちばん大きいもの（ウィジェットの半分以上を占めるときだけ）
+     * 見つからなければ null（丸めない）。
+     */
+    private fun findBackground(host: android.view.ViewGroup): android.view.View? {
+        host.findViewById<android.view.View>(android.R.id.background)?.let { return it }
+        var v: android.view.View = host
+        while (v is android.view.ViewGroup && v.childCount == 1) {
+            v = v.getChildAt(0)
+            if (v.background != null) return v
+        }
+        var best: android.view.View? = null
+        var bestArea = 0
+        fun walk(x: android.view.View) {
+            if (x !== host && x.background != null && x.visibility == VISIBLE) {
+                val area = x.width * x.height
+                if (area > bestArea) { best = x; bestArea = area }
+            }
+            if (x is android.view.ViewGroup) for (i in 0 until x.childCount) walk(x.getChildAt(i))
+        }
+        walk(host)
+        return best?.takeIf { bestArea * 2 >= host.width * host.height }
     }
 
     private fun cornerRadius(): Float {
