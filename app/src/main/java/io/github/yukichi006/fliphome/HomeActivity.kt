@@ -299,8 +299,23 @@ class HomeActivity : Activity() {
         }
         return BookPanel(this, store.bookPeel) {
             bookPages[m.id] = (idx + 1) % count
-            rebuildHome()
+            turnBook(m)
         }.apply { setSheets(sheetFor(idx), if (count > 1) sheetFor((idx + 1) % count) else null, idx, count) }
+    }
+
+    /**
+     * めくれるパネル [m] をめくりきったら、そのパネルだけを次の布で作り直し、新しい布が縫い上がるように出す
+     * （ほかの部品は作り直さない）。
+     */
+    private fun turnBook(m: Module) {
+        val i = (0 until grid.childCount).indexOfFirst { (grid.getChildAt(it).layoutParams as? ModuleGrid.Params)?.module?.id == m.id }
+        if (i < 0) { rebuildHome(); return }
+        val current = store.modules(page).firstOrNull { it.id == m.id } ?: m
+        val view = bookView(current)
+        view.setOnLongClickListener { enterEdit(); true }
+        grid.removeViewAt(i)
+        grid.addView(view, i, ModuleGrid.Params(current))
+        Sewing.start(listOf(view), grid, root)
     }
 
     /** 部品 [m] の画面の部品を作る。[inPatch] なら、布のない部品（時計・カレンダー・天気など）をワッペンに載せる。 */
@@ -534,7 +549,7 @@ class HomeActivity : Activity() {
             grid.translationX = -dir * w
             grid.translationX = 0f
             // 新しいページの部品を、ミシンで縫い上げるように出す
-            Sewing.start((0 until grid.childCount).map { grid.getChildAt(it) }, grid)
+            Sewing.start((0 until grid.childCount).map { grid.getChildAt(it) } + dock, grid, root)
             swayPouches(dir)
         }.start()
     }

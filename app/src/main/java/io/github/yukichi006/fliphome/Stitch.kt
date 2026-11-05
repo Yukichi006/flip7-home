@@ -55,8 +55,12 @@ object Sewing {
     /** 中身（アイコンや文字）の濃さ（0〜255）。縫い目が半分ほど縫えてから浮かび上がる。 */
     fun contentAlpha(): Int = (((progress - 0.35f) / 0.65f).coerceIn(0f, 1f) * 255).toInt()
 
-    /** [views] を縫い上げる。ミシンのように、短い振動を 3 回入れる。 */
-    fun start(views: List<android.view.View>, haptic: android.view.View?) {
+    /**
+     * [views] を縫い上げる。ミシンのように、短い振動を 3 回入れる。
+     * 縫い上がりの具合は画面全体で 1 つなので、[views] の中に入っている部品（めくれるパネルの中のアプリ、ワッペンに載せた部品など）も
+     * 毎回描き直す。終わったら [root] の中をすべて描き直し、途中の絵（中身がまだ見えない絵）が残らないようにする。
+     */
+    fun start(views: List<android.view.View>, haptic: android.view.View?, root: android.view.View? = null) {
         animator?.cancel()
         animator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 520
@@ -65,7 +69,8 @@ object Sewing {
             addUpdateListener { a ->
                 progress = a.animatedValue as Float
                 for (v in views) {
-                    if (v is SewAware) v.invalidate() else v.alpha = contentAlpha() / 255f
+                    if (v !is SewAware) v.alpha = contentAlpha() / 255f
+                    invalidateTree(v)
                 }
                 val t = (a.animatedFraction * 4).toInt()
                 if (t > ticks && t <= 3) {
@@ -76,11 +81,18 @@ object Sewing {
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     progress = 1f
-                    views.forEach { if (it is SewAware) it.invalidate() else it.alpha = 1f }
+                    views.forEach { if (it !is SewAware) it.alpha = 1f; invalidateTree(it) }
+                    root?.let { invalidateTree(it) }
                 }
             })
             start()
         }
+    }
+
+    /** [v] と、その中の部品をすべて描き直す。 */
+    private fun invalidateTree(v: android.view.View) {
+        v.invalidate()
+        if (v is android.view.ViewGroup) for (i in 0 until v.childCount) invalidateTree(v.getChildAt(i))
     }
 }
 
