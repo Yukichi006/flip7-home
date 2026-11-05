@@ -26,9 +26,10 @@ enum class ModuleType(
     val h: Int,
     val resizable: Boolean,
     val addable: Boolean = true,
-    /** 大きさを変えるときの、いちばん小さい幅と、いちばん大きい高さ。 */
+    /** 大きさを変えるときの、いちばん小さい幅・高さと、いちばん大きい高さ。 */
     val minW: Int = 1,
     val maxH: Int = 99,
+    val minH: Int = 1,
 ) {
     APP("アプリ", "", 1, 1, false, addable = false),
     FOLDER("巾着", "複数のアプリをまとめるフォルダ", 1, 1, false),
@@ -44,6 +45,7 @@ enum class ModuleType(
     WEATHER("天気", "天気と 13 目盛りの温度計（地点を選ぶ）", 1, 3, true),
     ANALOG("アナログ時計", "カバー画面と同じ、刺繍の文字盤の時計", 2, 2, true),
     WIDGET("アプリのウィジェット", "ほかのアプリのウィジェット（Suica の残高、カレンダーなど）", 3, 2, true),
+    BOOK("めくれるパネル", "アプリを並べた布。角をめくると次の布が出る（2×2 から）", 3, 4, true, minW = 2, minH = 2),
 }
 
 /**
@@ -66,6 +68,21 @@ data class Module(
     operator fun get(key: String): String? = props[key]
 
     fun with(key: String, value: String?): Module = copy(props = if (value == null) props - key else props + (key to value))
+
+    /** めくれるパネルの布（1 枚ずつ、パネルの中のマス目の配置）。なければ空の布 1 枚。 */
+    val sheets: List<Page>
+        get() = props[P_SHEETS]?.let { s ->
+            runCatching {
+                val a = JSONArray(s)
+                (0 until a.length()).map { i ->
+                    val ms = a.getJSONArray(i)
+                    Page((0 until ms.length()).mapNotNull { fromJson(ms.getJSONObject(it)) })
+                }
+            }.getOrNull()
+        }.orEmpty().ifEmpty { listOf(Page(emptyList())) }
+
+    fun withSheets(list: List<Page>): Module =
+        with(P_SHEETS, JSONArray(list.map { p -> JSONArray(p.modules.map { it.toJson() }) }).toString())
 
     /** フォルダの中のアプリのキー。 */
     val folderApps: List<String> get() = props[P_APPS]?.split("\n")?.filter { it.isNotEmpty() }.orEmpty()
@@ -93,6 +110,9 @@ data class Module(
         const val P_LON = "lon"
         const val P_MINMAX = "minmax"
         const val P_TAP_APP = "tapApp"
+
+        /** めくれるパネルの布の中身（JSON）。 */
+        const val P_SHEETS = "sheets"
 
         /** アプリのウィジェットの番号。 */
         const val P_WIDGET = "widget"
@@ -192,7 +212,7 @@ class LayoutStore(context: Context) {
     fun placeAt(page: Int, type: ModuleType, col: Int, row: Int, props: Map<String, String> = emptyMap()): Module? {
         val h = home
         val list = modules(page)
-        for (hh in minOf(type.h, type.maxH) downTo 1) for (ww in type.w downTo type.minW) {
+        for (hh in minOf(type.h, type.maxH) downTo type.minH) for (ww in type.w downTo type.minW) {
             val m = Module(0, type, col, row, ww, hh, props)
             if (fits(h, list, m)) return m.copy(id = newId()).also { new -> updatePage(page) { it + new } }
         }
@@ -204,12 +224,105 @@ class LayoutStore(context: Context) {
     fun remove(page: Int, module: Module) = updatePage(page) { list -> list.filter { it.id != module.id } }
 
     /** [key] のアプリのパッドがあるページ（なければ null）。 */
-    fun pageOfApp(key: String): Int? =
-        home.pages.indexOfFirst { p -> p.modules.any { it.type == ModuleType.APP && it[Module.P_APP] == key } }.takeIf { it >= 0 }
+    private fun isApp(m: Module, key: String) = m.type == ModuleType.APP && m[Module.P_APP] == key
 
+    /** アプリが置いてあるページ（めくれるパネルの中も見る）。 */
+    fun pageOfApp(key: String): Int? =
+        home.pages.indexOfFirst { p ->
+            p.modules.any { isApp(it, key) || (it.type == ModuleType.BOOK && it.sheets.any { s -> s.modules.any { a -> isApp(a, key) } }) }
+        }.takeIf { it >= 0 }
+
+    /** アプリを、ホーム画面（めくれるパネルの中も）から外す。 */
     fun removeApp(key: String) {
         val h = home
-        home = h.copy(pages = h.pages.map { p -> Page(p.modules.filterNot { it.type == ModuleType.APP && it[Module.P_APP] == key }) })
+        home = h.copy(pages = h.pages.map { p ->
+            Page(p.modules.filterNot { isApp(it, key) }.map { m ->
+                if (m.type == ModuleType.BOOK) m.withSheets(m.sheets.map { s -> Page(s.modules.filterNot { isApp(it, key) }) }) else m
+            })
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // めくれるパネル
+    // ------------------------------------------------------------------
+
+    /** [page] ページ目のめくれるパネル [bookId] の、[index] 枚目の布の盤（パネルの大きさのマス目）。 */
+    fun bookBoard(page: Int, bookId: Long, index: Int): Board {
+        fun book() = modules(page).firstOrNull { it.id == bookId }
+        val b = book()
+        return Board(b?.w ?: 1, b?.h ?: 1, { book()?.sheets?.getOrNull(index)?.modules.orEmpty() }, { list ->
+            val cur = book() ?: return@Board
+            val sheets = cur.sheets
+            if (index in sheets.indices) replace(page, cur.withSheets(sheets.mapIndexed { i, p -> if (i == index) Page(list) else p }))
+        }, ::newId, inBook = true)
+    }
+
+    /**
+     * めくれるパネルの大きさを変えたときに、中のアプリを並べ直す。アプリは下（親指の届く側）にそろえたまま動かし、
+     * 入りきらなくなったアプリは、空いているマス（なければ新しい布）へ移す。
+     */
+    fun reflowBook(old: Module, new: Module): Module {
+        if (old.w == new.w && old.h == new.h) return new
+        val cols = new.w
+        val rows = new.h
+        val d = rows - old.h
+        val overflow = mutableListOf<Module>()
+        val sheets = old.sheets.map { p ->
+            Page(p.modules.mapNotNull { m ->
+                val r = m.row + d
+                if (r < 0 || r + m.h > rows || m.col + m.w > cols) { overflow += m; null } else m.copy(row = r)
+            })
+        }.toMutableList()
+        for (m0 in overflow) {
+            val m = m0.copy(w = minOf(m0.w, cols), h = minOf(m0.h, rows))
+            var placed = false
+            while (!placed) {
+                for (i in sheets.indices) {
+                    val at = freeSpotIn(sheets[i], m, cols, rows) ?: continue
+                    sheets[i] = Page(sheets[i].modules + m.copy(col = at.first, row = at.second))
+                    placed = true
+                    break
+                }
+                if (!placed) sheets += Page(emptyList())
+            }
+        }
+        return new.withSheets(sheets)
+    }
+
+    private fun freeSpotIn(p: Page, m: Module, cols: Int, rows: Int): Pair<Int, Int>? {
+        for (r in rows - m.h downTo 0) for (c in 0..cols - m.w) {
+            val at = m.copy(col = c, row = r)
+            if (p.modules.none { it.overlaps(at) }) return c to r
+        }
+        return null
+    }
+
+    // ------------------------------------------------------------------
+    // 0.27 までの「片手の画面」から、1 つのマス目の形へ移す
+    // ------------------------------------------------------------------
+
+    /** 片手の画面・マス目の画面の区別をなくした形に、まだ移していないか。 */
+    val needsUnify: Boolean get() = !prefs.getBoolean("unified", false)
+
+    /**
+     * 移す。片手の画面を使っていたなら、1 ページ目は情報のマス目と、右下のめくれるパネル（今までの布をそのまま入れる）、
+     * 2 ページ目から先は足したページ。今までのマス目の画面の配置は、念のため別に取っておく。
+     * [rows] は、今の画面の行の数（マス目の高さから決まる）。
+     */
+    fun unify(rows: Int) {
+        if (thumbMode) {
+            prefs.getString(KEY_HOME, null)?.let { prefs.edit().putString("$KEY_HOME.before-unify", it).apply() }
+            val t = thumb
+            val panelRows = t.rows.coerceIn(2, rows)
+            val book = Module(newId(), ModuleType.BOOK, Thumb.INFO_COLS - Thumb.COLS, rows - panelRows, Thumb.COLS, panelRows)
+                .withSheets(t.sheets)
+            // 本の場所にかかる部品（パネルを高くしていたときに隠れていたもの）は、外さずに残す（はみ出した部品は出ないだけ）
+            val first = Page(t.info.modules.filterNot { it.overlaps(book) } + book)
+            home = home.copy(cols = Thumb.INFO_COLS, rows = rows, pages = listOf(first) + t.pages)
+        } else {
+            home = home.copy(rows = rows)
+        }
+        prefs.edit().putBoolean("unified", true).apply()
     }
 
     /** 部品を、大きさはそのままで別のページの空いている場所へ移す。空きがなければ false。 */
@@ -318,16 +431,6 @@ class LayoutStore(context: Context) {
 
     private fun withTop(left: Page, top: Page) = Page(left.modules + top.modules.map { it.copy(col = it.col + Thumb.INFO_COLS - Thumb.COLS) })
 
-    /**
-     * 片手の画面の、情報のマス目（[Thumb.INFO_COLS] 列 × [rows] 行。行の数は画面の高さで決まる）。
-     * 右下のアプリのパネルの場所には、部品を置けない。
-     */
-    fun infoBoard(rows: Int): Board {
-        val t = thumb
-        val panel = android.graphics.Rect(Thumb.INFO_COLS - Thumb.COLS, rows - t.rows, Thumb.INFO_COLS, rows)
-        return Board(Thumb.INFO_COLS, rows, { thumb.info.modules }, { list -> thumb = thumb.copy(info = Page(list)) }, ::newId, panel)
-    }
-
     /** 右上の、最初の中身：日付と今日の予定（右の 3 列の中での場所）。 */
     private fun defaultTop() = Page(listOf(
         Module(newId(), ModuleType.DATE, 0, 0, 3, 1, mapOf(Module.P_ALIGN to "mc")),
@@ -375,48 +478,8 @@ class LayoutStore(context: Context) {
         m.copy(col = 0, row = i * 2, w = 2, h = 2)
     })
 
-    /** 片手の画面の 2 ページ目から先（[index] は 0 から。[Thumb.INFO_COLS] 列 × [rows] 行の全面のマス目）。 */
-    fun extraBoard(index: Int, rows: Int) = Board(Thumb.INFO_COLS, rows, { thumb.pages.getOrNull(index)?.modules.orEmpty() }, { list ->
-        val t = thumb
-        if (index in t.pages.indices) thumb = t.copy(pages = t.pages.mapIndexed { i, p -> if (i == index) Page(list) else p })
-    }, ::newId)
-
-    /** 片手の画面のページを足す（いちばん後ろ）。足したページの番号（2 ページ目なら 0）を返す。 */
-    fun addThumbPage(): Int {
-        val t = thumb
-        thumb = t.copy(pages = t.pages + Page(emptyList()))
-        return t.pages.size
-    }
-
-    /** 片手の画面のページを外す。置いてあったウィジェットの番号を返す（後片付け用）。 */
-    fun removeThumbPage(index: Int): List<Int> {
-        val t = thumb
-        val gone = t.pages.getOrNull(index)?.modules.orEmpty().mapNotNull { it[Module.P_WIDGET]?.toIntOrNull() }
-        thumb = t.copy(pages = t.pages.filterIndexed { i, _ -> i != index })
-        return gone
-    }
-
-    /** 右のパネルの [index] 枚目の布（[Thumb.COLS] 列 × 行）。 */
-    fun sheetBoard(index: Int) = Board(Thumb.COLS, thumb.rows, { thumb.sheets.getOrNull(index)?.modules.orEmpty() }, { list ->
-        val t = thumb
-        if (index in t.sheets.indices) thumb = t.copy(sheets = t.sheets.mapIndexed { i, p -> if (i == index) Page(list) else p })
-    }, ::newId)
-
     /** マス目の画面の [page] ページ目。 */
     fun gridBoard(page: Int) = Board(home.cols, home.rows, { modules(page) }, { list -> updatePage(page) { list } }, ::newId)
-
-    fun addSheet(after: Int): Int {
-        val t = thumb
-        val at = (after + 1).coerceIn(0, t.sheets.size)
-        thumb = t.copy(sheets = t.sheets.toMutableList().apply { add(at, Page(emptyList())) })
-        return at
-    }
-
-    fun removeSheet(index: Int) {
-        val t = thumb
-        if (t.sheets.size <= 1) return
-        thumb = t.copy(sheets = t.sheets.filterIndexed { i, _ -> i != index })
-    }
 
     /** 片手の画面を、今のマス目の画面から作る：情報は時計・カレンダー・天気・電池、アプリは右のパネルへ順に。 */
     private fun thumbFromHome(): Thumb {
@@ -560,8 +623,10 @@ class Board(
     private val read: () -> List<Module>,
     private val write: (List<Module>) -> Unit,
     private val newId: () -> Long,
-    /** 部品を置けない場所（マスの単位。片手の画面のアプリのパネル）。 */
+    /** 部品を置けない場所（マスの単位）。 */
     private val reserved: android.graphics.Rect? = null,
+    /** めくれるパネルの中の布か（ページを移すなどはできない）。 */
+    val inBook: Boolean = false,
 ) {
     fun modules(): List<Module> = read()
 
@@ -572,7 +637,7 @@ class Board(
     /** [type] の部品を [col], [row] に置く。最初の大きさが入らなければ、入るところまで小さくする。 */
     fun placeAt(type: ModuleType, col: Int, row: Int, props: Map<String, String> = emptyMap()): Module? {
         val list = read()
-        for (hh in minOf(type.h, rows, type.maxH) downTo 1) for (ww in minOf(type.w, cols) downTo type.minW) {
+        for (hh in minOf(type.h, rows, type.maxH) downTo type.minH) for (ww in minOf(type.w, cols) downTo type.minW) {
             val m = Module(-1, type, col, row, ww, hh, props)
             if (fits(list, m)) return m.copy(id = newId()).also { write(list + it) }
         }
@@ -765,7 +830,24 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
     private var preview: Module? = null
     private var previewOk = false
 
-    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = editing
+    /** 編集モードで、中の部品に触らせている途中か（めくれるパネルの中のアプリを並べ替えるとき）。 */
+    private var passing = false
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (!editing) return false
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            passing = false
+            val list = moduleViews()
+            // × とつまみの近くは、いつも外のマス目で受ける
+            val reach = context.dp(BadgePainter.R_DP) * 1.7f
+            val nearBadge = list.any { (_, m) ->
+                badgeDistance(m, ev.x, ev.y, false) < reach || (m.type.resizable && badgeDistance(m, ev.x, ev.y, true) < reach)
+            }
+            val child = list.lastOrNull { (v, _) -> ev.x >= v.left && ev.x < v.right && ev.y >= v.top && ev.y < v.bottom }?.first
+            if (!nearBadge && child is EditPassThrough && child.passesEdit(ev.x - child.left, ev.y - child.top)) passing = true
+        }
+        return !passing
+    }
 
     /** 部品の × （[bottom] なら右下のつまみ）の中心から、指までの距離。 */
     private fun badgeDistance(m: Module, x: Float, y: Float, bottom: Boolean): Float {
@@ -819,7 +901,7 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
                     val all = list.map { it.second }
                     val target = if (resizing) {
                         val w = ((ev.x - m.col * cellW()) / cellW()).roundToInt().coerceIn(1, cols - m.col).coerceAtLeast(m.type.minW)
-                        val h = ((ev.y - gridTop() - m.row * cellH()) / cellH()).roundToInt().coerceIn(1, minOf(rows - m.row, m.type.maxH).coerceAtLeast(1))
+                        val h = ((ev.y - gridTop() - m.row * cellH()) / cellH()).roundToInt().coerceIn(1, minOf(rows - m.row, m.type.maxH).coerceAtLeast(1)).coerceAtLeast(minOf(m.type.minH, rows - m.row))
                         m.copy(w = w, h = h)
                     } else {
                         v.translationX = dx
@@ -866,6 +948,11 @@ class ModuleGrid(context: Context) : ViewGroup(context) {
         removeHit = false
         invalidate()
     }
+}
+
+/** 編集モードで、中の部品へ触らせたい部品（めくれるパネル）。座標はその部品の中。 */
+interface EditPassThrough {
+    fun passesEdit(x: Float, y: Float): Boolean
 }
 
 /** 編集モードの丸い印（× とつまみ）を描く。フェルトの丸に、ステッチの輪と糸の印。 */

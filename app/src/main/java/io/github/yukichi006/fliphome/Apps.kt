@@ -121,8 +121,10 @@ class AppRepository(private val context: Context) {
         val list = (pinned + used).toMutableList()
         if (list.size < MAX_FREQUENT && apps.sumOf { store.launches(it.key) } < 30) {
             val home = store.home
-            val placed = (home.dock.filterNotNull() + store.thumb.sheets.firstOrNull()?.modules.orEmpty().mapNotNull { it[Module.P_APP] } +
-                home.pages.firstOrNull()?.modules.orEmpty().mapNotNull { it[Module.P_APP] })
+            // 下段と、1 ページ目（めくれるパネルの 1 枚目の布も）に置いたアプリ
+            val first = home.pages.firstOrNull()?.modules.orEmpty()
+            val placed = home.dock.filterNotNull() + first.mapNotNull { it[Module.P_APP] } +
+                first.filter { it.type == ModuleType.BOOK }.flatMap { b -> b.sheets.first().modules.mapNotNull { it[Module.P_APP] } }
             for (key in placed) if (list.size < MAX_FREQUENT) find(key)?.let { if (it !in list) list += it }
         }
         return list.take(MAX_FREQUENT)

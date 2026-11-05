@@ -45,137 +45,6 @@ class SheetView(context: Context, val grid: ModuleGrid) : FrameLayout(context) {
 }
 
 /**
- * 片手の画面の全体。画面全体に情報のマス目（[grid]、[Thumb.INFO_COLS] 列）を敷き、その右下 [Thumb.COLS] 列 × [rows] 行に、
- * めくれるアプリのパネル（[panel]）を重ねる。マスの大きさは幅で決まり（高さは幅の [Thumb.CELL_RATIO] 倍くらい）、
- * 行の数は画面の高さから決まる。パネルの上と左の空いたマスには、左右をまたいで部品を置ける。
- *
- * 編集モード（[editing]）では、パネルの上の縁に「つまみ」を縫い付ける。つまみを上下にドラッグすると、
- * パネルの段の数が変わり、離すと [onRowsChanged] に新しい段の数を渡す。
- */
-@SuppressLint("ViewConstructor")
-class ThumbArea(
-    context: Context,
-    val grid: ModuleGrid,
-    private val onRowsChanged: (Int) -> Unit,
-) : ViewGroup(context) {
-    var panel: BookPanel? = null
-        set(value) {
-            if (field === value) return
-            field?.let { removeView(it) }
-            field = value
-            value?.let { addView(it) }
-        }
-
-    var rows = Thumb.DEFAULT_ROWS
-        set(value) { if (field != value) { field = value; requestLayout() } }
-
-    var editing = false
-        set(value) { field = value; invalidate() }
-
-    init {
-        setWillNotDraw(false)
-        grid.autoRowsRatio = Thumb.CELL_RATIO
-        grid.reservedCols = Thumb.COLS
-        addView(grid)
-    }
-
-    private fun cellW() = width / Thumb.INFO_COLS.toFloat()
-    private fun cellH() = height / grid.rows.coerceAtLeast(1).toFloat()
-
-    /** パネルにできるいちばん多い段の数（上の部品にぶつかるところまで。部品を隠さない）。 */
-    fun maxRows(): Int = maxOf(rows, grid.freeRowsAtBottomRight(Thumb.COLS)).coerceIn(Thumb.MIN_ROWS, minOf(grid.rows, LayoutStore.MAX_ROWS).coerceAtLeast(Thumb.MIN_ROWS))
-
-    private fun shownRows() = rows.coerceIn(1, grid.rows.coerceAtLeast(1))
-
-    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = MeasureSpec.getSize(widthMeasureSpec)
-        val h = MeasureSpec.getSize(heightMeasureSpec)
-        setMeasuredDimension(w, h)
-        // 情報のマス目が、高さから行の数を決める
-        grid.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
-        val r = shownRows()
-        grid.reservedRows = r
-        val cw = w / Thumb.INFO_COLS.toFloat()
-        val ch = h / grid.rows.coerceAtLeast(1).toFloat()
-        panel?.measure(MeasureSpec.makeMeasureSpec((cw * Thumb.COLS).roundToInt(), MeasureSpec.EXACTLY),
-            MeasureSpec.makeMeasureSpec((ch * r).roundToInt(), MeasureSpec.EXACTLY))
-    }
-
-    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        val w = r - l
-        val h = b - t
-        grid.layout(0, 0, w, h)
-        panel?.let { p -> p.layout(w - p.measuredWidth, h - p.measuredHeight, w, h) }
-    }
-
-    // ---- 編集モードの、パネルの高さを変えるつまみ ----
-
-    private val tab = RectF()
-    private val tabPatch = PatchPainter(context, PatchPainter.Shape.Round(12f))
-    private val chevron = context.stitch(1.4f)
-    private val label = context.threadText(12f, bold = true).apply { textAlign = Paint.Align.CENTER }
-    private var dragging = false
-
-    private fun tabRect(): RectF {
-        val y = (panel?.top ?: height).toFloat()
-        val tw = context.dp(132f)
-        val th = context.dp(34f)
-        val cx = (panel?.let { (it.left + it.right) / 2f } ?: (width / 2f))
-        tab.set(cx - tw / 2, y - th * 0.55f, cx + tw / 2, y + th * 0.45f)
-        return tab
-    }
-
-    override fun dispatchDraw(canvas: Canvas) {
-        super.dispatchDraw(canvas)
-        if (!editing) return
-        val r = tabRect()
-        canvas.save()
-        canvas.translate(r.left - tabPatch.margin, r.top - tabPatch.margin)
-        tabPatch.draw(canvas, (r.width() + tabPatch.margin * 2).toInt(), (r.height() + tabPatch.margin * 2).toInt())
-        canvas.restore()
-        // 上下の矢印を縫った山形と、今の段の数
-        val cx = r.left + context.dp(22f)
-        val cy = r.centerY()
-        val a = context.dp(5f)
-        val path = Path().apply {
-            moveTo(cx - a, cy - a * 0.6f); lineTo(cx, cy - a * 1.6f); lineTo(cx + a, cy - a * 0.6f)
-            moveTo(cx - a, cy + a * 0.6f); lineTo(cx, cy + a * 1.6f); lineTo(cx + a, cy + a * 0.6f)
-        }
-        canvas.drawPath(path, chevron)
-        canvas.drawText("アプリ $rows 段", r.centerX() + context.dp(10f), cy - (label.ascent() + label.descent()) / 2, label)
-    }
-
-    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        if (!editing || ev.actionMasked != MotionEvent.ACTION_DOWN) return dragging
-        val r = tabRect()
-        val slack = context.dp(10f)
-        dragging = ev.x in r.left - slack..r.right + slack && ev.y in r.top - slack..r.bottom + slack
-        if (dragging) parent?.requestDisallowInterceptTouchEvent(true)
-        return dragging
-    }
-
-    override fun onTouchEvent(ev: MotionEvent): Boolean {
-        if (!dragging) return false
-        when (ev.actionMasked) {
-            MotionEvent.ACTION_MOVE -> {
-                // 指の高さから、パネルの段の数を決める（マスの高さごとに、ぴたっと止まる）
-                val r = ((height - ev.y) / cellH()).roundToInt().coerceIn(Thumb.MIN_ROWS, maxRows())
-                if (r != rows) {
-                    rows = r
-                    performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                    invalidate()
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                dragging = false
-                onRowsChanged(rows)
-            }
-        }
-        return true
-    }
-}
-
-/**
  * めくれるアプリのパネル。いちばん上の布（[top]）の角をつまんで [peel] の向きにめくると、下の布（[under]）が見え、
  * めくりきって離すと次の布に替わる（[onTurned]）。最後の布の次は最初の布に戻る。
  * 布が 2 枚以上あるときは、めくる角が少しだけめくれていて、下の布がのぞく。下の帯にページの点を縫う。
@@ -185,7 +54,16 @@ class BookPanel(
     context: Context,
     private val peel: PeelFrom,
     private val onTurned: () -> Unit,
-) : FrameLayout(context) {
+) : FrameLayout(context), EditPassThrough {
+    /** 編集モードで、布のマス目の上に触れたら、中のアプリを並べ替えられるようにする（外のマス目に取られないように）。 */
+    override fun passesEdit(x: Float, y: Float): Boolean {
+        val sheet = top ?: return false
+        val g = sheet.grid
+        val l = sheet.left + g.left
+        val t = sheet.top + g.top
+        return x >= l && x < l + g.width && y >= t && y < t + g.height
+    }
+
     private var top: SheetView? = null
     private var under: SheetView? = null
     var count = 1
