@@ -102,6 +102,8 @@ class Sheet(context: Context, private val bottomInset: Int, private val onClosed
 
 /**
  * 角の丸い押しボタン。選んでいるもの（[selected]）は糸の色で塗り、そうでないものは布にステッチで縁取る。
+ * 文字は見切れないように、幅に入るまで小さくし、それでも入らなければ終わりを「…」にする。
+ * 「名前\n説明」のように改行を入れると、2 行目を小さく薄い文字で添える。
  */
 @SuppressLint("ViewConstructor")
 class Pill(context: Context, private val text: String, private val selected: Boolean = false) : View(context) {
@@ -111,6 +113,13 @@ class Pill(context: Context, private val text: String, private val selected: Boo
         textAlign = Paint.Align.CENTER
         if (selected) clearShadowLayer()
     }
+    private val note = context.threadText(11f, color = if (selected) Cloth.BASE else Thread.DIM).apply {
+        textAlign = Paint.Align.CENTER
+        if (selected) clearShadowLayer()
+    }
+    private val lines = text.split("\n", limit = 2)
+    private val baseSize = label.textSize
+    private val noteSize = note.textSize
     private val rect = RectF()
 
     init {
@@ -119,8 +128,18 @@ class Pill(context: Context, private val text: String, private val selected: Boo
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val w = (label.measureText(text) + context.dp(36f)).toInt()
-        setMeasuredDimension(resolveSize(w, widthMeasureSpec), resolveSize(context.dpi(50f), heightMeasureSpec))
+        label.textSize = baseSize
+        val w = (label.measureText(lines[0]) + context.dp(36f)).toInt()
+        val h = context.dpi(if (lines.size > 1) 62f else 50f)
+        setMeasuredDimension(resolveSize(w, widthMeasureSpec), resolveSize(h, heightMeasureSpec))
+    }
+
+    /** [t] を幅 [maxW] に入れる：[paint] の文字を [min] まで小さくし、それでも入らなければ終わりを「…」に。 */
+    private fun fit(t: String, paint: android.text.TextPaint, size: Float, min: Float, maxW: Float): CharSequence {
+        paint.textSize = size
+        val w = paint.measureText(t)
+        if (w > maxW) paint.textSize = (size * maxW / w).coerceAtLeast(min)
+        return TextUtils.ellipsize(t, paint, maxW, TextUtils.TruncateAt.END)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -130,7 +149,18 @@ class Pill(context: Context, private val text: String, private val selected: Boo
         canvas.drawRoundRect(rect, r, r, fill)
         rect.inset(context.dp(3.5f), context.dp(3.5f))
         canvas.drawRoundRect(rect, rect.height() / 2, rect.height() / 2, stitch)
-        canvas.drawText(text, width / 2f, height / 2f + label.textSize * 0.35f, label)
+        // 文字は、内側の縫い目の丸い角にかからない幅に収める
+        val maxW = width - rect.height() - context.dp(8f)
+        val first = fit(lines[0], label, baseSize, context.sp(10f), maxW)
+        if (lines.size == 1) {
+            canvas.drawText(first, 0, first.length, width / 2f, height / 2f + label.textSize * 0.35f, label)
+        } else {
+            val second = fit(lines[1], note, noteSize, context.sp(9f), maxW)
+            val total = label.textSize + note.textSize * 1.25f
+            val top = (height - total) / 2f
+            canvas.drawText(first, 0, first.length, width / 2f, top + label.textSize * 0.85f, label)
+            canvas.drawText(second, 0, second.length, width / 2f, top + label.textSize + note.textSize * 1.05f, note)
+        }
     }
 }
 
@@ -142,7 +172,7 @@ fun actionList(context: Context, items: List<Pair<String, () -> Unit>>, note: St
     }
     for ((label, action) in items) {
         column.addView(Pill(context, label).apply { setOnClickListener { action() } },
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(54f)))
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(if ('\n' in label) 66f else 54f)))
     }
     if (note != null) {
         column.addView(TextView(context).apply {
@@ -159,7 +189,7 @@ fun actionList(context: Context, items: List<Pair<String, () -> Unit>>, note: St
 fun modulePicker(context: Context, onPick: (ModuleType) -> Unit): View =
     actionList(
         context,
-        ModuleType.entries.filter { it.addable }.map { t -> "${t.label}（${t.note}）" to { onPick(t) } },
+        ModuleType.entries.filter { it.addable }.map { t -> "${t.label}\n${t.note}" to { onPick(t) } },
         note = "置いたあとは、ドラッグで移動、右下のつまみで大きさを変えられます。",
     )
 
