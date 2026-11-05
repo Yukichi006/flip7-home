@@ -39,7 +39,7 @@ object StitchIcons {
     private const val GRID = 128
 
     /** 作り方を変えたら上げる（古い保存済みの絵を使わないようにする）。 */
-    private const val RECIPE = 2
+    private const val RECIPE = 3
 
     private val memory = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
@@ -308,17 +308,21 @@ object StitchIcons {
 
     /** 輪郭をアイコンの大きさに合わせて並べ直し、ステッチで縫った絵にする。 */
     private fun sew(raw: List<FloatArray>, size: Int): Bitmap {
-        // 短すぎる線（ノイズ）を除き、長い順に最大 14 本まで
-        var lines = raw.filter { length(it) > GRID * 0.12f }.sortedByDescending { length(it) }.take(14)
-        if (lines.isEmpty()) lines = raw.sortedByDescending { length(it) }.take(1)
+        // アイコンの外枠（角の丸い四角や丸の輪郭）は縫わない。中の絵があるときだけ外し、その分だけ絵を大きく縫う
+        val inner = raw.filterNot { isFrame(it) }
+        val source = if (inner.any { length(it) > GRID * 0.08f }) inner else raw
+        // 短すぎる線（ノイズ）を除き、長い順に最大 20 本まで
+        var lines = source.filter { length(it) > GRID * 0.08f }.sortedByDescending { length(it) }.take(20)
+        if (lines.isEmpty()) lines = source.sortedByDescending { length(it) }.take(1)
 
         var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
         for (l in lines) for (i in l.indices step 2) {
             minX = min(minX, l[i]); maxX = max(maxX, l[i]); minY = min(minY, l[i + 1]); maxY = max(maxY, l[i + 1])
         }
-        val stroke = size * 0.045f
+        // 細い糸で、短い縫い目を詰めて縫う（細かい形も読み取れるように）
+        val stroke = size * 0.03f
         // 図柄の大きさをそろえ、どのアプリも同じくらいの大きさの刺繍にする
-        val box = size * 0.80f
+        val box = size * 0.84f
         val scale = box / max(maxX - minX, maxY - minY).coerceAtLeast(1f)
         val ox = (size - (maxX - minX) * scale) / 2 - minX * scale
         val oy = (size - (maxY - minY) * scale) / 2 - minY * scale
@@ -332,8 +336,23 @@ object StitchIcons {
             if (closed) path.close()
         }
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        Canvas(bitmap).drawPath(path, stitchPaint(stroke, size * 0.095f, size * 0.07f))
+        Canvas(bitmap).drawPath(path, stitchPaint(stroke, size * 0.055f, size * 0.04f))
         return bitmap
+    }
+
+    /**
+     * アイコンの外枠の輪郭か（形を読み取ると、アイコンの土台の角の丸い四角や丸も線になる）。
+     * マス目のほぼ端から端まで広がる、閉じた線を外枠とみなす。
+     */
+    private fun isFrame(l: FloatArray): Boolean {
+        if (l.size < 8) return false
+        val closed = abs(l[0] - l[l.size - 2]) < 0.01f && abs(l[1] - l[l.size - 1]) < 0.01f
+        if (!closed) return false
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE; var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
+        for (i in l.indices step 2) {
+            minX = min(minX, l[i]); maxX = max(maxX, l[i]); minY = min(minY, l[i + 1]); maxY = max(maxY, l[i + 1])
+        }
+        return maxX - minX > GRID * 0.82f && maxY - minY > GRID * 0.82f
     }
 
     /** 角を少し丸める（チャイキン法を 1 回）。 */
