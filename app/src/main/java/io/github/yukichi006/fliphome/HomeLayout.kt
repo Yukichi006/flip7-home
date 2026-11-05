@@ -43,6 +43,7 @@ enum class ModuleType(
     MEDIA("再生中の曲", "曲名と再生ボタン", 3, 1, true),
     WEATHER("天気", "天気と 13 目盛りの温度計（地点を選ぶ）", 1, 3, true),
     ANALOG("アナログ時計", "カバー画面と同じ、刺繍の文字盤の時計", 2, 2, true),
+    WIDGET("アプリのウィジェット", "ほかのアプリのウィジェット（Suica の残高、カレンダーなど）", 3, 2, true),
 }
 
 /**
@@ -92,6 +93,9 @@ data class Module(
         const val P_LON = "lon"
         const val P_MINMAX = "minmax"
         const val P_TAP_APP = "tapApp"
+
+        /** アプリのウィジェットの番号。 */
+        const val P_WIDGET = "widget"
 
         /** パッドのアプリ名：「show」で出す、「hide」で隠す（なければ、全体の設定に合わせる）。 */
         const val P_LABEL = "label"
@@ -371,6 +375,27 @@ class LayoutStore(context: Context) {
         m.copy(col = 0, row = i * 2, w = 2, h = 2)
     })
 
+    /** 片手の画面の 2 ページ目から先（[index] は 0 から。[Thumb.INFO_COLS] 列 × [rows] 行の全面のマス目）。 */
+    fun extraBoard(index: Int, rows: Int) = Board(Thumb.INFO_COLS, rows, { thumb.pages.getOrNull(index)?.modules.orEmpty() }, { list ->
+        val t = thumb
+        if (index in t.pages.indices) thumb = t.copy(pages = t.pages.mapIndexed { i, p -> if (i == index) Page(list) else p })
+    }, ::newId)
+
+    /** 片手の画面のページを足す（いちばん後ろ）。足したページの番号（2 ページ目なら 0）を返す。 */
+    fun addThumbPage(): Int {
+        val t = thumb
+        thumb = t.copy(pages = t.pages + Page(emptyList()))
+        return t.pages.size
+    }
+
+    /** 片手の画面のページを外す。置いてあったウィジェットの番号を返す（後片付け用）。 */
+    fun removeThumbPage(index: Int): List<Int> {
+        val t = thumb
+        val gone = t.pages.getOrNull(index)?.modules.orEmpty().mapNotNull { it[Module.P_WIDGET]?.toIntOrNull() }
+        thumb = t.copy(pages = t.pages.filterIndexed { i, _ -> i != index })
+        return gone
+    }
+
     /** 右のパネルの [index] 枚目の布（[Thumb.COLS] 列 × 行）。 */
     fun sheetBoard(index: Int) = Board(Thumb.COLS, thumb.rows, { thumb.sheets.getOrNull(index)?.modules.orEmpty() }, { list ->
         val t = thumb
@@ -493,9 +518,11 @@ class LayoutStore(context: Context) {
  * 片手の画面の配置：画面全体の情報のマス目（[info]、[INFO_COLS] 列）と、その右下に重ねるアプリのパネルの布
  * （[sheets]、1 枚ずつめくる。[COLS] 列 × [rows] 段。パネルは情報のマス目の右下 [COLS] 列 × [rows] 行を占める）。
  */
-data class Thumb(val info: Page, val sheets: List<Page>, val rows: Int) {
+data class Thumb(val info: Page, val sheets: List<Page>, val rows: Int, val pages: List<Page> = emptyList()) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("rows", rows)
+        // 2 ページ目から先（ウィジェットなどを置く、全面のマス目）
+        put("pages", JSONArray(pages.map { p -> JSONObject().put("modules", JSONArray(p.modules.map { it.toJson() })) }))
         put("info", JSONObject().put("modules", JSONArray(info.modules.map { it.toJson() })))
         put("sheets", JSONArray(sheets.map { p -> JSONObject().put("modules", JSONArray(p.modules.map { it.toJson() })) }))
     }
@@ -516,8 +543,9 @@ data class Thumb(val info: Page, val sheets: List<Page>, val rows: Int) {
 
         fun fromJson(o: JSONObject): Thumb {
             val sheets = o.optJSONArray("sheets")?.let { a -> (0 until a.length()).map { page(a.getJSONObject(it)) } }.orEmpty()
+            val pages = o.optJSONArray("pages")?.let { a -> (0 until a.length()).map { page(a.getJSONObject(it)) } }.orEmpty()
             return Thumb(page(o.optJSONObject("info")), sheets.ifEmpty { listOf(Page(emptyList())) },
-                o.optInt("rows", DEFAULT_ROWS).coerceIn(MIN_ROWS, LayoutStore.MAX_ROWS))
+                o.optInt("rows", DEFAULT_ROWS).coerceIn(MIN_ROWS, LayoutStore.MAX_ROWS), pages)
         }
     }
 }

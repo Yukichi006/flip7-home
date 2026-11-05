@@ -46,6 +46,16 @@ class HomeActivity : Activity() {
     private lateinit var editBar: View
     private lateinit var infoGrid: ModuleGrid
     private lateinit var thumbArea: ThumbArea
+
+    /** 片手の画面の 2 ページ目から先の、全面のマス目。 */
+    private lateinit var extraGrid: ModuleGrid
+
+    /** 片手の画面で見ているページ（0 がアプリのパネルのある 1 ページ目）。 */
+    private var thumbPage = 0
+
+    /** 置こうとしているウィジェット（番号と、置くマス）。許可・初期設定の画面から戻るまで覚えておく。 */
+    private var pendingWidget: Int = -1
+    private var pendingCell: Pair<Int, Int>? = null
     private var book: BookPanel? = null
 
     /** 片手の画面で、右のパネルの何枚目の布を出しているか。 */
@@ -88,7 +98,7 @@ class HomeActivity : Activity() {
             setOnLongClickListener { enterEdit(); true }
         }
         wireGrid(grid) { store.gridBoard(page) }
-        dots = PageDots(this) { goToPage(it) }
+        dots = PageDots(this) { if (store.thumbMode) goToThumbPage(it) else goToPage(it) }
         dock = PocketDock(this).apply {
             setOnLongClickListener { enterEdit(); true }
             onSlotTap = { i -> showDockSheet(i) }
@@ -109,6 +119,15 @@ class HomeActivity : Activity() {
             rebuildHome()
         }
         column.addView(thumbArea, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply {
+            setMargins(side, dpi(4f), side, dpi(6f))
+        })
+        // 片手の画面の 2 ページ目から先：ウィジェットや部品を置く、全面のマス目
+        extraGrid = ModuleGrid(this).apply {
+            setOnLongClickListener { enterEdit(); true }
+            autoRowsRatio = Thumb.CELL_RATIO
+        }
+        wireGrid(extraGrid) { store.extraBoard(thumbPage - 1, extraGrid.rows) }
+        column.addView(extraGrid, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply {
             setMargins(side, dpi(4f), side, dpi(6f))
         })
         column.addView(dots, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(20f)))
@@ -170,8 +189,15 @@ class HomeActivity : Activity() {
         LockArt.refreshIfNeeded(this)
     }
 
+    override fun onStart() {
+        super.onStart()
+        // 表示している間だけ、ウィジェットの更新を受け取る
+        runCatching { AppWidgets.host(this).startListening() }
+    }
+
     override fun onStop() {
         super.onStop()
+        runCatching { AppWidgets.host(this).stopListening() }
         if (ready) popover?.dismiss()
     }
 
@@ -219,7 +245,12 @@ class HomeActivity : Activity() {
     private fun wireGrid(g: ModuleGrid, board: () -> Board) {
         g.onEmptyTap = { c, r -> activeBoard = board(); showCellSheet(c, r) }
         g.onModuleTap = { m -> activeBoard = board(); showModuleSheet(m) }
-        g.onRemove = { m -> board().remove(m); rebuildHome() }
+        g.onRemove = { m ->
+            board().remove(m)
+            // ウィジェットを外したら、その番号も返す
+            m[Module.P_WIDGET]?.toIntOrNull()?.let { runCatching { AppWidgets.host(this).deleteAppWidgetId(it) } }
+            rebuildHome()
+        }
         g.onChange = { new -> board().replace(new); rebuildHome() }
     }
 
@@ -228,10 +259,18 @@ class HomeActivity : Activity() {
         val thumbMode = store.thumbMode
         // 片手の画面とマス目の画面を切り替える
         grid.visibility = if (thumbMode) View.GONE else View.VISIBLE
-        thumbArea.visibility = if (thumbMode) View.VISIBLE else View.GONE
+        val pageCount = store.thumb.pages.size + 1
+        thumbPage = thumbPage.coerceIn(0, pageCount - 1)
+        thumbArea.visibility = if (thumbMode && thumbPage == 0) View.VISIBLE else View.GONE
+        extraGrid.visibility = if (thumbMode && thumbPage > 0) View.VISIBLE else View.GONE
         if (thumbMode) {
-            rebuildThumb()
-            dots.visibility = View.GONE
+            if (thumbPage == 0) rebuildThumb() else {
+                extraGrid.configure(Thumb.INFO_COLS, extraGrid.rows)
+                fill(extraGrid, store.thumb.pages[thumbPage - 1].modules, inPatches = true)
+            }
+            dots.count = pageCount
+            dots.current = thumbPage
+            dots.visibility = if (pageCount > 1) View.VISIBLE else View.GONE
             rebuildDock(store.home)
             return
         }
@@ -305,6 +344,7 @@ class HomeActivity : Activity() {
         val view: View = when (m.type) {
             ModuleType.CLOCK -> ClockView(this)
             ModuleType.ANALOG -> AnalogClockView(this)
+            ModuleType.WIDGET -> widgetView(m) ?: return null
             ModuleType.AGENDA -> AgendaView(this)
             ModuleType.BATTERY -> BatteryPatch(this)
             // アンインストールされたアプリ（や一時的に使えない仕事用のアプリ）は表示しないだけで、配置は残す
@@ -378,14 +418,114 @@ class HomeActivity : Activity() {
         }
     }
 
+    // ------------------------------------------------------------------
+    // アプリのウィジェット
+    // ------------------------------------------------------------------
+
+    /** ウィジェットの部品の画面。ウィジェットのアプリが消えていれば null。 */
+    private fun widgetView(m: Module): View? {
+        val id = m[Module.P_WIDGET]?.toIntOrNull() ?: return null
+        val info = android.appwidget.AppWidgetManager.getInstance(this).getAppWidgetInfo(id) ?: return null
+        val host = runCatching { AppWidgets.host(this).createView(this, id, info) }.getOrNull() ?: return null
+        return WidgetCell(this) { enterEdit() }.apply {
+            addView(host, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+    }
+
+    /** マス ([col], [row]) に置くウィジェットを選ぶ。 */
+    private fun pickWidget(col: Int, row: Int) {
+        val am = android.appwidget.AppWidgetManager.getInstance(this)
+        val pm = packageManager
+        val providers = am.installedProviders.map { info ->
+            val app = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(info.provider.packageName, 0)) }.getOrDefault(info.provider.packageName)
+            info to "$app：${info.loadLabel(pm)}"
+        }.sortedBy { it.second.lowercase() }
+        if (providers.isEmpty()) {
+            toast("置けるウィジェットが見つかりませんでした")
+            return
+        }
+        sheet?.setBody(actionList(this, providers.map { (info, label) ->
+            label to {
+                val id = AppWidgets.host(this).allocateAppWidgetId()
+                pendingWidget = id
+                pendingCell = col to row
+                closeSheet()
+                if (am.bindAppWidgetIdIfAllowed(id, info.provider)) configureWidget()
+                else {
+                    // 初めてのときは、Android が「FlipHome にウィジェットを許可するか」を確認する
+                    @Suppress("DEPRECATION")
+                    runCatching {
+                        startActivityForResult(Intent(android.appwidget.AppWidgetManager.ACTION_APPWIDGET_BIND)
+                            .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                            .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider), REQUEST_BIND_WIDGET)
+                    }.onFailure { cancelWidget() }
+                }
+            }
+        }, note = "置いたあとは、右下のつまみで大きさを変えられます。"))
+    }
+
+    /** 初期設定が必要なウィジェットなら、その画面を開く。不要ならそのまま置く。 */
+    private fun configureWidget() {
+        val id = pendingWidget
+        val info = android.appwidget.AppWidgetManager.getInstance(this).getAppWidgetInfo(id)
+        val optional = info != null && (info.widgetFeatures and android.appwidget.AppWidgetProviderInfo.WIDGET_FEATURE_CONFIGURATION_OPTIONAL) != 0
+        if (info?.configure != null && !optional) {
+            runCatching { AppWidgets.host(this).startAppWidgetConfigureActivityForResult(this, id, 0, REQUEST_CONFIGURE_WIDGET, null) }
+                .onFailure { finishWidget() }
+        } else finishWidget()
+    }
+
+    /** 選んだウィジェットを、覚えておいたマスに置く（入らなければ、入るところまで小さくする）。 */
+    private fun finishWidget() {
+        val id = pendingWidget
+        val (col, row) = pendingCell ?: (0 to 0)
+        pendingWidget = -1
+        pendingCell = null
+        val placed = board().placeAt(ModuleType.WIDGET, col, row, mapOf(Module.P_WIDGET to id.toString()))
+        if (placed == null) {
+            runCatching { AppWidgets.host(this).deleteAppWidgetId(id) }
+            toast("ここには置けません")
+        }
+        rebuildHome()
+    }
+
+    private fun cancelWidget() {
+        if (pendingWidget != -1) runCatching { AppWidgets.host(this).deleteAppWidgetId(pendingWidget) }
+        pendingWidget = -1
+        pendingCell = null
+    }
+
+    /** 片手の画面のページを移る。最後のページでさらに左へめくると、アプリ一覧を出す。 */
+    private fun goToThumbPage(target: Int) {
+        val count = store.thumb.pages.size + 1
+        val t = target.coerceIn(0, count - 1)
+        val from = if (thumbPage == 0) thumbArea else extraGrid
+        if (t == thumbPage) {
+            from.animate().translationX(0f).setDuration(160).start()
+            return
+        }
+        val dir = if (t > thumbPage) -1 else 1
+        val w = from.width.toFloat()
+        from.animate().translationX(dir * w).setDuration(150).withEndAction {
+            from.translationX = 0f
+            thumbPage = t
+            activeBoard = null
+            rebuildHome()
+            val to = if (thumbPage == 0) thumbArea else extraGrid
+            to.translationX = -dir * w * 0.3f
+            to.animate().translationX(0f).setDuration(150).start()
+        }.start()
+    }
+
     /** 部品 [m] が置いてある盤（片手の画面なら、情報のマス目）。 */
     private fun boardHolding(m: Module): Board {
         if (!store.thumbMode) return store.gridBoard(page)
+        if (thumbPage > 0) return store.extraBoard(thumbPage - 1, extraGrid.rows)
         return store.infoBoard(infoGrid.rows)
     }
 
     private fun refreshModules() {
-        for (g in listOf(grid, infoGrid)) for (i in 0 until g.childCount) {
+        for (g in listOf(grid, infoGrid, extraGrid)) for (i in 0 until g.childCount) {
             when (val v = g.getChildAt(i)) {
                 is AgendaView -> v.reload()
                 is BatteryPatch -> v.refresh()
@@ -539,6 +679,24 @@ class HomeActivity : Activity() {
         val home = store.home
         if (store.thumbMode) {
             val t = store.thumb
+            menu.add("ページを足す（ウィジェットなどを置く）").setOnMenuItemClickListener {
+                thumbPage = store.addThumbPage() + 1
+                activeBoard = null
+                rebuildHome()
+                toast("${thumbPage + 1} ページ目を足しました。空いたマスをタップして、ウィジェットを置けます")
+                true
+            }
+            if (thumbPage > 0) {
+                menu.add("このページを外す（${thumbPage + 1} ページ目）").setOnMenuItemClickListener {
+                    confirm("${thumbPage + 1} ページ目と、そこに置いた部品やウィジェットを外します。") {
+                        store.removeThumbPage(thumbPage - 1).forEach { runCatching { AppWidgets.host(this@HomeActivity).deleteAppWidgetId(it) } }
+                        thumbPage -= 1
+                        activeBoard = null
+                        rebuildHome()
+                    }
+                    true
+                }
+            }
             menu.add("右のパネルに布を足す").setOnMenuItemClickListener {
                 bookIndex = store.addSheet(bookIndex)
                 rebuildHome()
@@ -737,6 +895,10 @@ class HomeActivity : Activity() {
             done()
         })
         fun moduleTab() = s.setBody(modulePicker(this) { type ->
+            if (type == ModuleType.WIDGET) {
+                pickWidget(col, row)
+                return@modulePicker
+            }
             val placed = board().placeAt(type, col, row, if (type == ModuleType.FOLDER) mapOf(Module.P_NAME to "フォルダ") else emptyMap())
             if (placed == null) {
                 toast("ここには置けません")
@@ -1120,6 +1282,15 @@ class HomeActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         @Suppress("DEPRECATION")
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_BIND_WIDGET || requestCode == REQUEST_CONFIGURE_WIDGET) {
+            if (pendingWidget == -1) return
+            when {
+                resultCode != RESULT_OK -> cancelWidget()
+                requestCode == REQUEST_BIND_WIDGET -> configureWidget()
+                else -> finishWidget()
+            }
+            return
+        }
         if (requestCode != REQUEST_IMPORT || resultCode != RESULT_OK || !ready) return
         val uri = data?.data ?: return
         val text = runCatching {
@@ -1155,6 +1326,8 @@ class HomeActivity : Activity() {
     companion object {
         private const val REQUEST_HOME = 21
         private const val REQUEST_IMPORT = 31
+        private const val REQUEST_BIND_WIDGET = 41
+        private const val REQUEST_CONFIGURE_WIDGET = 42
 
         /** 布のない部品（ワッペンに載せるかどうかを選べる）。 */
         private val BARE = setOf(ModuleType.CLOCK, ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.WEATHER)
@@ -1181,7 +1354,7 @@ class HomeActivity : Activity() {
         private val slop = ViewConfiguration.get(context).scaledTouchSlop
         private var downX = 0f
         private var downY = 0f
-        private var mode = 0 // 0: まだ, 1: 上へ（一覧）, 2: 下へ（通知）, 3: 左右（ページ）, 4: 左へ（片手の画面のアプリ一覧）
+        private var mode = 0 // 0: まだ, 1: 上へ（一覧）, 2: 下へ（通知）, 3: 左右（ページ）, 4: 左へ（片手の画面のアプリ一覧）, 5: 左右（片手の画面のページ）
         private var velocity: VelocityTracker? = null
 
         init { setWillNotDraw(false) }
@@ -1229,8 +1402,11 @@ class HomeActivity : Activity() {
                 }
             } else if (abs(dx) > slop * 1.5f && abs(dx) > abs(dy) * 1.3f) {
                 if (store.thumbMode) {
-                    // 片手の画面：左へスワイプで、右からアプリ一覧（2 ページ目）が出てくる
-                    if (dx < 0) {
+                    val last = store.thumb.pages.size
+                    // 片手の画面：左右でページを移る。最後のページでさらに左へスワイプすると、右からアプリ一覧が出てくる
+                    if ((dx < 0 && thumbPage < last) || (dx > 0 && thumbPage > 0)) {
+                        mode = 5
+                    } else if (dx < 0) {
                         mode = 4
                         drawer.reset()
                         drawer.fromRight = true
@@ -1256,6 +1432,7 @@ class HomeActivity : Activity() {
                     when (mode) {
                         1 -> drawer.translationY = (height + dy).coerceIn(0f, height.toFloat())
                         4 -> drawer.translationX = (width + dx).coerceIn(0f, width.toFloat())
+                        5 -> (if (thumbPage == 0) thumbArea else extraGrid).translationX = dx
                         3 -> {
                             // 端のページでは、それ以上めくれないことが分かるよう重くする
                             val atEdge = (dx > 0 && page == 0) || (dx < 0 && page == store.home.pages.size - 1)
@@ -1271,6 +1448,11 @@ class HomeActivity : Activity() {
                         1 -> if (-dy > height * 0.15f || vy < -dp(800f)) openDrawer() else closeDrawer()
                         2 -> if (dy > dp(40f)) expandNotifications()
                         4 -> if (-dx > width * 0.15f || vx < -dp(700f)) openDrawer() else closeDrawer()
+                        5 -> when {
+                            dx < -width * 0.18f || vx < -dp(700f) -> goToThumbPage(thumbPage + 1)
+                            dx > width * 0.18f || vx > dp(700f) -> goToThumbPage(thumbPage - 1)
+                            else -> goToThumbPage(thumbPage)
+                        }
                         3 -> when {
                             dx < -width * 0.18f || vx < -dp(700f) -> goToPage(page + 1)
                             dx > width * 0.18f || vx > dp(700f) -> goToPage(page - 1)
