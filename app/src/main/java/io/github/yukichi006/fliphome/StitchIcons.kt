@@ -78,12 +78,18 @@ object StitchIcons {
     }
 
     // 糸の太さを変えたら作り直す
-    private fun key(app: AppEntry, size: Int) = "${app.key}@${app.updatedAt}:$size:${StitchStyle.scale}:$RECIPE"
+    private fun key(app: AppEntry, size: Int) = "${app.key}@${app.updatedAt}:$size:${StitchStyle.scale}:$RECIPE:" + if (colored) "c" else "w"
+
+    /** なぞる刺繍を、アイコンの色の糸で縫うか（設定。変えたら作った絵を使い分ける）。 */
+    @Volatile var colored = true
 
     private fun render(context: Context, app: AppEntry, size: Int): Bitmap {
         val icon = runCatching { app.info.getIcon(context.resources.displayMetrics.densityDpi) }.getOrNull()
         val contours = icon?.let { traceIcon(it) }.orEmpty()
-        return if (contours.isNotEmpty()) sew(contours, size) else sewLetter(app.label, size)
+        if (contours.isEmpty()) return sewLetter(app.label, size)
+        // 線ごとに、その線のまわりのアイコンの色の糸で縫う（設定で「生成り」にしていれば、すべて生成り）
+        val colorOf = if (icon != null && colored) colorPicker(icon) else { _: FloatArray -> Thread.COLOR }
+        return sew(contours, size, colorOf)
     }
 
     // ------------------------------------------------------------------
@@ -306,8 +312,68 @@ object StitchIcons {
         return s
     }
 
-    /** 輪郭をアイコンの大きさに合わせて並べ直し、ステッチで縫った絵にする。 */
-    private fun sew(raw: List<FloatArray>, size: Int): Bitmap {
+    // ------------------------------------------------------------------
+    // アイコンの色（試し：アクセントの色の糸）
+    // ------------------------------------------------------------------
+
+    /**
+     * 線ごとの糸の色を決める道具を作る。アイコンを形を読んだのと同じマス目に描いておき、線に沿ったまわりの点の色のうち、
+     * 鮮やかな色（白・黒・灰色を除く）をいちばん多い色合いでまとめた色を、糸らしい色にして返す。
+     * まわりに鮮やかな色がなければ生成り。何色も使うアイコン（Slack など）は、形ごとに違う色になる。
+     */
+    fun colorPicker(icon: Drawable): (FloatArray) -> Int {
+        val bitmap = Bitmap.createBitmap(GRID, GRID, Bitmap.Config.ARGB_8888)
+        icon.setBounds(0, 0, GRID, GRID)
+        icon.colorFilter = null
+        icon.draw(Canvas(bitmap))
+        val px = IntArray(GRID * GRID)
+        bitmap.getPixels(px, 0, GRID, 0, 0, GRID, GRID)
+        bitmap.recycle()
+        val hsv = FloatArray(3)
+        return { line ->
+            val bins = 24
+            val weight = FloatArray(bins)
+            val sumR = FloatArray(bins); val sumG = FloatArray(bins); val sumB = FloatArray(bins)
+            var samples = 0
+            val step = maxOf(2, (line.size / 2) / 60) * 2
+            var i = 0
+            while (i < line.size - 1) {
+                val cx = line[i].toInt(); val cy = line[i + 1].toInt()
+                for (dy in -2..2) for (dx in -2..2) {
+                    val x = cx + dx; val y = cy + dy
+                    if (x !in 0 until GRID || y !in 0 until GRID) continue
+                    val c = px[y * GRID + x]
+                    if (Color.alpha(c) < 128) continue
+                    samples++
+                    Color.colorToHSV(c, hsv)
+                    if (hsv[1] < 0.35f || hsv[2] < 0.3f) continue
+                    val b = (hsv[0] / 360f * bins).toInt().coerceIn(0, bins - 1)
+                    val w = hsv[1] * hsv[2]
+                    weight[b] += w
+                    sumR[b] += Color.red(c) * w; sumG[b] += Color.green(c) * w; sumB[b] += Color.blue(c) * w
+                }
+                i += step
+            }
+            val best = weight.indices.maxByOrNull { weight[it] }
+            if (best == null || samples == 0 || weight[best] < samples * 0.08f) Thread.COLOR
+            else {
+                val w = weight[best]
+                threadTone(Color.rgb((sumR[best] / w).toInt(), (sumG[best] / w).toInt(), (sumB[best] / w).toInt()))
+            }
+        }
+    }
+
+    /** 取り出した色を、黒い布の上で糸らしく見える色にする（少し明るく、少しくすませる）。 */
+    fun threadTone(color: Int): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(color, hsv)
+        hsv[1] = (hsv[1] * 0.78f).coerceIn(0.25f, 0.75f)
+        hsv[2] = hsv[2].coerceAtLeast(0.88f)
+        return Color.HSVToColor(hsv)
+    }
+
+    /** 輪郭をアイコンの大きさに合わせて並べ直し、ステッチで縫った絵にする。[colorOf] で線ごとの糸の色を決める。 */
+    private fun sew(raw: List<FloatArray>, size: Int, colorOf: (FloatArray) -> Int = { Thread.COLOR }): Bitmap {
         // アイコンの外枠（角の丸い四角や丸の輪郭）は縫わない。中の絵があるときだけ外し、その分だけ絵を大きく縫う
         val inner = raw.filterNot { isFrame(it) }
         val source = if (inner.any { length(it) > GRID * 0.08f }) inner else raw
@@ -327,16 +393,40 @@ object StitchIcons {
         val ox = (size - (maxX - minX) * scale) / 2 - minX * scale
         val oy = (size - (maxY - minY) * scale) / 2 - minY * scale
 
-        val path = Path()
+        // 線を短い区間に分け、区間ごとにまわりの色の糸で縫う（ひと続きの形でも、色が変わる所で糸の色を替える）。
+        // 区間のまわりに鮮やかな色がなければ、線全体の色にする。
+        // 縫い目（点線）が区間の境目で始まり直さないよう、線の始めからの長さで点線の位置をそろえる
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val len = 0.65f + 0.35f * StitchStyle.scale
+        val dash = size * 0.055f * len
+        val gap = size * 0.04f * len
+        val paints = HashMap<Int, android.graphics.Paint>()
+        val chunk = 14
         for (l in lines) {
             val pts = chaikin(l)
-            val closed = abs(l[0] - l[l.size - 2]) < 0.01f && abs(l[1] - l[l.size - 1]) < 0.01f
-            path.moveTo(pts[0] * scale + ox, pts[1] * scale + oy)
-            for (i in 2 until pts.size step 2) path.lineTo(pts[i] * scale + ox, pts[i + 1] * scale + oy)
-            if (closed) path.close()
+            val n = pts.size / 2
+            val lineColor = colorOf(pts)
+            var start = 0
+            var walked = 0f
+            while (start < n - 1) {
+                val end = minOf(n - 1, start + chunk)
+                val part = pts.copyOfRange(start * 2, end * 2 + 2)
+                val color = colorOf(part).takeIf { it != Thread.COLOR } ?: lineColor
+                val base = paints.getOrPut(color) { stitchPaint(stroke, size * 0.055f, size * 0.04f, color) }
+                val paint = android.graphics.Paint(base).apply {
+                    pathEffect = android.graphics.DashPathEffect(floatArrayOf(dash, gap), walked % (dash + gap))
+                }
+                val path = Path()
+                path.moveTo(part[0] * scale + ox, part[1] * scale + oy)
+                for (i in 2 until part.size step 2) {
+                    path.lineTo(part[i] * scale + ox, part[i + 1] * scale + oy)
+                    walked += hypot((part[i] - part[i - 2]) * scale, (part[i + 1] - part[i - 1]) * scale)
+                }
+                canvas.drawPath(path, paint)
+                start = end
+            }
         }
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        Canvas(bitmap).drawPath(path, stitchPaint(stroke, size * 0.055f, size * 0.04f))
         return bitmap
     }
 

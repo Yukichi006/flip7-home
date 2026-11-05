@@ -73,6 +73,7 @@ class HomeActivity : Activity() {
 
         store = LayoutStore(this)
         StitchStyle.scale = store.thread
+        StitchIcons.colored = store.traceColored
         repo = AppRepository(this)
         repo.start()
         if (store.home.dock.all { it == null } && !getSharedPreferences("home", 0).getBoolean("dockInit", false)) {
@@ -590,6 +591,13 @@ class HomeActivity : Activity() {
         val peelMenu = menu.addSubMenu("裏地をめくる向き（いま：${store.peel.label}）")
         for (p in PeelFrom.entries) {
             peelMenu.add(p.label).setOnMenuItemClickListener { store.peel = p; rebuildHome(); true }
+        }
+        menu.add(if (store.traceColored) "なぞる刺繍の糸：アイコンの色（生成りにする）" else "なぞる刺繍の糸：生成り（アイコンの色にする）").setOnMenuItemClickListener {
+            store.traceColored = !store.traceColored
+            StitchIcons.colored = store.traceColored
+            rebuildHome()
+            if (drawer.visibility == View.VISIBLE) drawer.rebuild()
+            true
         }
         val labelMenu = menu.addSubMenu("パッドのアプリ名（いま：${store.padLabel.label}）")
         for (l in PadLabel.entries) labelMenu.add(l.label).setOnMenuItemClickListener { store.padLabel = l; rebuildHome(); true }

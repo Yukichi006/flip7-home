@@ -262,6 +262,11 @@ class LayoutStore(context: Context) {
     // 片手の画面（左に情報の列、右にめくれるアプリのパネル）
     // ------------------------------------------------------------------
 
+    /** なぞる刺繍を、アイコンの色の糸で縫うか（false なら生成りの糸）。最初はアイコンの色。 */
+    var traceColored: Boolean
+        get() = prefs.getBoolean("traceColored", true)
+        set(value) = prefs.edit().putBoolean("traceColored", value).apply()
+
     /** パッドのアプリ名の出し方（全体の設定）。 */
     var padLabel: PadLabel
         get() = PadLabel.of(prefs.getString("padLabel", null))
