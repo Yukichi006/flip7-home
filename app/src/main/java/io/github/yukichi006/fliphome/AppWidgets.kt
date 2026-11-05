@@ -65,6 +65,38 @@ class WidgetCell(context: Context, private val onLongPress: () -> Unit) : FrameL
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent) = longFired
 
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        roundCorners()
+    }
+
+    /**
+     * ウィジェットの角を丸める。Android 12 からのウィジェットは、角を自分では丸めず、土台に印（android:id/background）を付けて、
+     * 丸めるのをホームアプリに任せている（Galaxy のホーム画面も丸めている）。印の付いた土台を、Android が決めている丸みで切り取る。
+     * 印がなければ、そのままにする（自分で丸めた絵を描いているウィジェットなど）。
+     */
+    private fun roundCorners() {
+        val host = getChildAt(0) as? android.appwidget.AppWidgetHostView ?: return
+        val bg = host.findViewById<android.view.View>(android.R.id.background) ?: return
+        val radius = cornerRadius()
+        if (bg.clipToOutline && (bg.outlineProvider as? Rounded)?.radius == radius) return
+        bg.outlineProvider = Rounded(radius)
+        bg.clipToOutline = true
+    }
+
+    private fun cornerRadius(): Float {
+        val sys = android.content.res.Resources.getSystem()
+        val id = sys.getIdentifier("system_app_widget_background_radius", "dimen", "android")
+        return if (id != 0) sys.getDimension(id) else resources.displayMetrics.density * 24f
+    }
+
+    /** 角を丸めた形。 */
+    private class Rounded(val radius: Float) : android.view.ViewOutlineProvider() {
+        override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+            outline.setRoundRect(0, 0, view.width, view.height, radius)
+        }
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         val view = getChildAt(0) as? android.appwidget.AppWidgetHostView ?: return
