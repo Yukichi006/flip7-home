@@ -317,7 +317,7 @@ class HomeActivity : Activity() {
         view.setOnLongClickListener { enterEdit(); true }
         grid.removeViewAt(i)
         grid.addView(view, i, ModuleGrid.Params(current))
-        Sewing.start(listOf(view), grid, root)
+        Sewing.start(listOf(view), grid, root, fade = false)
     }
 
     /** 部品 [m] の画面の部品を作る。[inPatch] なら、布のない部品（時計・カレンダー・天気など）をワッペンに載せる。 */
@@ -1097,12 +1097,13 @@ class HomeActivity : Activity() {
         }
     }
 
-    /** ファスナーの上の縁の高さ（画面の中の位置）。アプリ一覧は、ここまでの高さで出す（ファスナーは隠さない）。 */
+    /** アプリ一覧を切って出す線（画面の中の位置）。ファスナーは隠さない。 */
     private fun zipLineY(): Int {
-        val z = dock.zipper ?: return root.height
+        if (dock.zipper == null) return root.height
         val loc = IntArray(2); dock.getLocationInWindow(loc)
         val r = IntArray(2); root.getLocationInWindow(r)
-        return (loc[1] - r[1] + z.topY).toInt()
+        // ポケットの上の縁（布の端）の線。アプリ一覧は、ポケットの口の奥から出てくるように、この線で切って出す
+        return (loc[1] - r[1] + dock.mouthY).toInt()
     }
 
     /** ファスナーから出すアプリ一覧の用意：ファスナーの上までの大きさにし、下から出す。 */

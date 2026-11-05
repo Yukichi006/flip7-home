@@ -50,6 +50,10 @@ object Cloth {
 object Sewing {
     var progress = 1f
         private set
+
+    /** 縫い上げている間も、布は濃いまま描くか（縫い目と中身だけを縫い上げる）。 */
+    var keepCloth = false
+        private set
     private var animator: android.animation.ValueAnimator? = null
 
     /** 中身（アイコンや文字）の濃さ（0〜255）。縫い目が半分ほど縫えてから浮かび上がる。 */
@@ -60,8 +64,10 @@ object Sewing {
      * 縫い上がりの具合は画面全体で 1 つなので、[views] の中に入っている部品（めくれるパネルの中のアプリ、ワッペンに載せた部品など）も
      * 毎回描き直す。終わったら [root] の中をすべて描き直し、途中の絵（中身がまだ見えない絵）が残らないようにする。
      */
-    fun start(views: List<android.view.View>, haptic: android.view.View?, root: android.view.View? = null) {
+    fun start(views: List<android.view.View>, haptic: android.view.View?, root: android.view.View? = null, fade: Boolean = true) {
         animator?.cancel()
+        // [fade] が false のときは、布と全体の濃さはそのままにし、縫い目と中身だけを縫い上げる（めくれるパネルの次の布など）
+        keepCloth = !fade
         animator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 520
             interpolator = android.view.animation.DecelerateInterpolator(1.3f)
@@ -69,7 +75,7 @@ object Sewing {
             addUpdateListener { a ->
                 progress = a.animatedValue as Float
                 for (v in views) {
-                    if (v !is SewAware) v.alpha = contentAlpha() / 255f
+                    if (fade && v !is SewAware) v.alpha = contentAlpha() / 255f
                     invalidateTree(v)
                 }
                 val t = (a.animatedFraction * 4).toInt()
@@ -81,6 +87,7 @@ object Sewing {
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     progress = 1f
+                    keepCloth = false
                     views.forEach { if (it !is SewAware) it.alpha = 1f; invalidateTree(it) }
                     root?.let { invalidateTree(it) }
                 }

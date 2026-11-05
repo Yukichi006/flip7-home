@@ -66,7 +66,7 @@ class PatchPainter(private val context: Context, private val shape: Shape = Shap
         if (rect.width() <= 0 || rect.height() <= 0) return
         // 縫い上がりの途中は、布をうっすら出し、縁のステッチを端から少しずつ縫う
         val p = Sewing.progress
-        val clothAlpha = if (p >= 1f) 255 else (p * 1.6f).coerceAtMost(1f).times(255).toInt()
+        val clothAlpha = if (p >= 1f || Sewing.keepCloth) 255 else (p * 1.6f).coerceAtMost(1f).times(255).toInt()
         shadow.alpha = clothAlpha; felt.alpha = clothAlpha; rim.alpha = clothAlpha / 20
         outline(path, rect)
         canvas.drawPath(path, shadow)

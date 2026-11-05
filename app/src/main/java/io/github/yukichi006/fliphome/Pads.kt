@@ -756,6 +756,9 @@ class PocketDock(context: Context) : PatchLayout(context, PatchPainter.Shape.Poc
         setPadding(p, p + context.dpi(6f), p, p)
     }
 
+    /** ポケットの上の縁（布の端）の高さ（ポケットの中の位置）。 */
+    val mouthY: Float get() = patch.margin
+
     /** 口のファスナー（null なら、ふつうの二重の縫い目）。右へ引ききると、アプリ一覧が開く。 */
     var zipper: ZipperTrack? = null
         set(value) {
