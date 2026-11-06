@@ -65,7 +65,10 @@ class WidgetCell(
         // 中身がマスいっぱいに広がる作りでない（決まった大きさの中身の）ときだけ、制限なしで測って、マスに入りきるか確かめる。
         // 広がる作り（カレンダーの一覧など）は、制限なしで測ると全部を並べた大きさになるので測らない
         needW = 0; needH = 0
-        val content = (child as? android.view.ViewGroup)?.getChildAt(0)
+        // 新しい作りのウィジェット（土台の印がある。アラームなど）は、渡された大きさに合わせて自分で並べ直すので、縮めない
+        // （飾りの絵がはみ出していても、大きく描くと別の並べ方になってしまう）
+        val modern = child.findViewById<android.view.View>(android.R.id.background) != null
+        val content = if (modern) null else (child as? android.view.ViewGroup)?.getChildAt(0)
         val lp = content?.layoutParams
         if (content != null && lp != null) {
             val fixedW = lp.width != android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -81,10 +84,12 @@ class WidgetCell(
         }
         // マスの大きさで測ったとき、中の部品（決まった大きさのカードなど）がマスからはみ出すなら、その大きさも本来の大きさとみなす
         child.measure(MeasureSpec.makeMeasureSpec(aw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ah, MeasureSpec.EXACTLY))
-        val (ow, oh) = overflow(child, 0, 0, 0)
-        if (ow > aw) needW = maxOf(needW, minOf(ow, aw * 2))
-        if (oh > ah) needH = maxOf(needH, minOf(oh, ah * 2))
-        val (cw, ch) = contentSize(w, h)
+        if (!modern) {
+            val (ow, oh) = overflow(child, 0, 0, 0)
+            if (ow > aw) needW = maxOf(needW, minOf(ow, aw * 2))
+            if (oh > ah) needH = maxOf(needH, minOf(oh, ah * 2))
+        }
+        val (cw, ch) = if (modern) aw to ah else contentSize(w, h)
         child.measure(MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY))
     }
 
@@ -158,7 +163,8 @@ class WidgetCell(
         val child = getChildAt(0) ?: return
         val w = right - left
         val h = bottom - top
-        val (cw, ch) = contentSize(w, h)
+        val cw = child.measuredWidth.takeIf { it > 0 } ?: contentSize(w, h).first
+        val ch = child.measuredHeight.takeIf { it > 0 } ?: contentSize(w, h).second
         child.layout(0, 0, cw, ch)
         // マスより大きく描いたときは、縦横の比を保ったまま縮めて、マスの真ん中に収める
         val scale = minOf((w - inset * 2).toFloat() / cw, (h - inset * 2).toFloat() / ch, 1f)
@@ -230,7 +236,8 @@ class WidgetCell(
         val view = getChildAt(0) as? android.appwidget.AppWidgetHostView ?: return
         val d = resources.displayMetrics.density
         // ウィジェットには、縮める前の（描いている）大きさを伝える
-        val (cw, ch) = contentSize(w, h)
+        val modern = view.findViewById<android.view.View>(android.R.id.background) != null
+        val (cw, ch) = if (modern) (w - inset * 2).coerceAtLeast(1) to (h - inset * 2).coerceAtLeast(1) else contentSize(w, h)
         runCatching { view.updateAppWidgetSize(Bundle(), listOf(SizeF(cw / d, ch / d))) }
     }
 }
