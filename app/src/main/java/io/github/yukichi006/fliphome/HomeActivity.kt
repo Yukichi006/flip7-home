@@ -23,6 +23,7 @@ import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 
 /**
@@ -409,7 +410,7 @@ class HomeActivity : Activity() {
         val id = m[Module.P_WIDGET]?.toIntOrNull() ?: return null
         val info = android.appwidget.AppWidgetManager.getInstance(this).getAppWidgetInfo(id) ?: return null
         val host = runCatching { AppWidgets.host(this).createView(this, id, info) }.getOrNull() ?: return null
-        return WidgetCell(this) { enterEdit() }.apply {
+        return WidgetCell(this, info.minWidth, info.minHeight) { enterEdit() }.apply {
             addView(host, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         }
     }
@@ -1396,15 +1397,30 @@ class HomeActivity : Activity() {
                     downX = ev.x
                     downY = ev.y
                     mode = 0
+                    longPressCancelled = false
                     velocity?.recycle()
                     velocity = VelocityTracker.obtain().also { it.addMovement(ev) }
                 }
                 MotionEvent.ACTION_MOVE -> {
                     velocity?.addMovement(ev)
+                    // 指が少しでも動いたら、下の部品の長押しを取り消す（ゆっくりスワイプしたときに、編集モードに入らないように）
+                    if (!longPressCancelled && hypot(ev.x - downX, ev.y - downY) > slop) {
+                        longPressCancelled = true
+                        cancelLongPresses(this)
+                    }
                     detect(ev)
                 }
             }
             return mode != 0
+        }
+
+        private var longPressCancelled = false
+
+        /** [v] と、その中の部品の長押しの待ち時間を取り消す。 */
+        private fun cancelLongPresses(v: View) {
+            v.cancelLongPress()
+            if (v is WidgetCell) v.cancelPendingLongPress()
+            if (v is android.view.ViewGroup) for (i in 0 until v.childCount) cancelLongPresses(v.getChildAt(i))
         }
 
         /** はっきり動いたら、上・下・左右のどれかを決める。 */

@@ -38,7 +38,32 @@ object AppWidgets {
  * 大きさが変わったら、ウィジェットに今の大きさを伝える（中身をその大きさに合わせてもらう）。
  */
 @SuppressLint("ViewConstructor")
-class WidgetCell(context: Context, private val onLongPress: () -> Unit) : FrameLayout(context) {
+class WidgetCell(
+    context: Context,
+    /** ウィジェットの本来の最小の大きさ（px）。マスがこれより小さいときは、この大きさで描いてから縮めて収める。 */
+    private val minW: Int = 0,
+    private val minH: Int = 0,
+    private val onLongPress: () -> Unit,
+) : FrameLayout(context) {
+    /** ほかの部品と同じくらい、マスの内側に空ける余白。 */
+    private val inset = (resources.displayMetrics.density * 4f).toInt()
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val w = MeasureSpec.getSize(widthMeasureSpec)
+        val h = MeasureSpec.getSize(heightMeasureSpec)
+        setMeasuredDimension(w, h)
+        val child = getChildAt(0) ?: return
+        val (cw, ch) = contentSize(w, h)
+        child.measure(MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY))
+    }
+
+    /** ウィジェットを描く大きさ：余白を除いたマスの大きさ。ただし本来の最小の大きさより小さくはしない（あとで縮める）。 */
+    private fun contentSize(w: Int, h: Int): Pair<Int, Int> {
+        val aw = (w - inset * 2).coerceAtLeast(1)
+        val ah = (h - inset * 2).coerceAtLeast(1)
+        return maxOf(aw, minW) to maxOf(ah, minH)
+    }
+
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
     private var downY = 0f
@@ -48,6 +73,9 @@ class WidgetCell(context: Context, private val onLongPress: () -> Unit) : FrameL
         performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
         onLongPress()
     }
+
+    /** 長押しの待ち時間を取り消す（ホーム画面のスワイプが始まったとき）。 */
+    fun cancelPendingLongPress() = removeCallbacks(longPress)
 
     override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
@@ -66,7 +94,19 @@ class WidgetCell(context: Context, private val onLongPress: () -> Unit) : FrameL
     override fun onTouchEvent(event: MotionEvent) = longFired
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
-        super.onLayout(changed, left, top, right, bottom)
+        val child = getChildAt(0) ?: return
+        val w = right - left
+        val h = bottom - top
+        val (cw, ch) = contentSize(w, h)
+        child.layout(0, 0, cw, ch)
+        // マスより大きく描いたときは、縦横の比を保ったまま縮めて、マスの真ん中に収める
+        val scale = minOf((w - inset * 2).toFloat() / cw, (h - inset * 2).toFloat() / ch, 1f)
+        child.pivotX = 0f
+        child.pivotY = 0f
+        child.scaleX = scale
+        child.scaleY = scale
+        child.translationX = (w - cw * scale) / 2f
+        child.translationY = (h - ch * scale) / 2f
         roundCorners()
     }
 
@@ -77,7 +117,8 @@ class WidgetCell(context: Context, private val onLongPress: () -> Unit) : FrameL
     private fun roundCorners() {
         val host = getChildAt(0) as? android.appwidget.AppWidgetHostView ?: return
         val bg = findBackground(host) ?: return
-        val radius = cornerRadius()
+        // 縮めて収めているときは、縮めたあとでほかのウィジェットと同じ丸みになるように
+        val radius = cornerRadius() / host.scaleX.coerceAtLeast(0.1f)
         if (bg.clipToOutline && (bg.outlineProvider as? Rounded)?.radius == radius) return
         bg.outlineProvider = Rounded(radius)
         bg.clipToOutline = true
@@ -127,6 +168,8 @@ class WidgetCell(context: Context, private val onLongPress: () -> Unit) : FrameL
         super.onSizeChanged(w, h, oldw, oldh)
         val view = getChildAt(0) as? android.appwidget.AppWidgetHostView ?: return
         val d = resources.displayMetrics.density
-        runCatching { view.updateAppWidgetSize(Bundle(), listOf(SizeF(w / d, h / d))) }
+        // ウィジェットには、縮める前の（描いている）大きさを伝える
+        val (cw, ch) = contentSize(w, h)
+        runCatching { view.updateAppWidgetSize(Bundle(), listOf(SizeF(cw / d, ch / d))) }
     }
 }
