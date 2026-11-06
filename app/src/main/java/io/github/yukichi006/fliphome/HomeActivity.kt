@@ -328,6 +328,8 @@ class HomeActivity : Activity() {
             ModuleType.ANALOG -> AnalogClockView(this)
             ModuleType.WIDGET -> widgetView(m) ?: return null
             ModuleType.BOOK -> bookView(m)
+            ModuleType.ALARM -> NextAlarmView(this)
+            ModuleType.EVENTS -> MonthEventsView(this)
             ModuleType.AGENDA -> AgendaView(this)
             ModuleType.BATTERY -> BatteryPatch(this)
             // アンインストールされたアプリ（や一時的に使えない仕事用のアプリ）は表示しないだけで、配置は残す
@@ -367,7 +369,7 @@ class HomeActivity : Activity() {
         // ワッペンの絵を自分で描く部品は、枠を描くかどうかだけ伝える（描かなければ中身が大きくなる）
         (view as? PatchView)?.framed = framed
         (view as? ZipperFader)?.framed = framed
-        if (m.type !in BARE || !framed) return view
+        if ((m.type !in BARE && m.type != ModuleType.WIDGET) || !framed) return view
         // 布のない部品（時計・カレンダー・天気など）は、ワッペンに載せる
         return PatchLayout(this, PatchPainter.Shape.Round(22f)).apply {
             val p = dpi(10f)
@@ -389,7 +391,12 @@ class HomeActivity : Activity() {
      * 布のない部品は片手の画面（[inPatch]）でだけ付け、ワッペンの部品はいつも付ける。
      */
     private fun isFramed(m: Module, inPatch: Boolean): Boolean =
-        m[Module.P_FRAME]?.let { it == "1" } ?: if (m.type in BARE) inPatch else true
+        m[Module.P_FRAME]?.let { it == "1" } ?: when (m.type) {
+            in BARE -> inPatch
+            // ほかのアプリのウィジェットは、最初は枠なし（選べば、フェルトのワッペンに載せて縁を縫う）
+            ModuleType.WIDGET -> false
+            else -> true
+        }
 
     /** 枠を付け外しできる部品なら、その切り替えのボタン。 */
     private fun frameItem(m: Module): Pair<String, () -> Unit>? {
@@ -487,6 +494,7 @@ class HomeActivity : Activity() {
         for (g in listOf(grid)) for (i in 0 until g.childCount) {
             when (val v = g.getChildAt(i)) {
                 is AgendaView -> v.reload()
+                is MonthEventsView -> v.reload()
                 is BatteryPatch -> v.refresh()
             }
         }
@@ -1355,7 +1363,8 @@ class HomeActivity : Activity() {
         private val BARE = setOf(ModuleType.CLOCK, ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.WEATHER)
 
         /** ステッチの枠を付け外しできる部品。 */
-        private val FRAMEABLE = BARE + setOf(ModuleType.AGENDA, ModuleType.BATTERY, ModuleType.MEDIA, ModuleType.SLIDER)
+        private val FRAMEABLE = BARE + setOf(ModuleType.AGENDA, ModuleType.BATTERY, ModuleType.MEDIA, ModuleType.SLIDER,
+            ModuleType.WIDGET, ModuleType.ALARM, ModuleType.EVENTS)
 
         /** アプリの設定のパネルに付ける目印（前後のアプリへ移るとき、同じパネルの中身だけ替える）。 */
         private const val APP_SETTINGS = "appSettings"
