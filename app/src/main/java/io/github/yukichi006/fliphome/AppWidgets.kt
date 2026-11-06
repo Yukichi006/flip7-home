@@ -48,8 +48,13 @@ class WidgetCell(
     private val minH: Int = 0,
     private val onLongPress: () -> Unit,
 ) : FrameLayout(context) {
-    /** ほかの部品と同じくらい、マスの内側に空ける余白。 */
-    private val inset = (resources.displayMetrics.density * 4f).toInt()
+    /** ほかの部品と同じくらい、マスの内側に空ける余白（古い作りのウィジェットだけ。新しい作りは大きさで並べ方を選ぶので、マスいっぱいに渡す）。 */
+    private val baseInset = (resources.displayMetrics.density * 4f).toInt()
+    private var inset = baseInset
+
+    /** 新しい作りのウィジェット（土台の印がある）か。 */
+    private fun isModern(): Boolean =
+        (getChildAt(0) as? android.view.ViewGroup)?.findViewById<android.view.View>(android.R.id.background) != null
 
     /** 中身が実際に必要とする大きさ（測ったもの）。申告の最小の大きさより大きな中身を描くウィジェット（Suica など）があるため。 */
     private var needW = 0
@@ -60,6 +65,7 @@ class WidgetCell(
         val h = MeasureSpec.getSize(heightMeasureSpec)
         setMeasuredDimension(w, h)
         val child = getChildAt(0) ?: return
+        inset = if (isModern()) 0 else baseInset
         val aw = (w - inset * 2).coerceAtLeast(1)
         val ah = (h - inset * 2).coerceAtLeast(1)
         // 中身がマスいっぱいに広がる作りでない（決まった大きさの中身の）ときだけ、制限なしで測って、マスに入りきるか確かめる。
@@ -236,8 +242,7 @@ class WidgetCell(
         val view = getChildAt(0) as? android.appwidget.AppWidgetHostView ?: return
         val d = resources.displayMetrics.density
         // ウィジェットには、縮める前の（描いている）大きさを伝える
-        val modern = view.findViewById<android.view.View>(android.R.id.background) != null
-        val (cw, ch) = if (modern) (w - inset * 2).coerceAtLeast(1) to (h - inset * 2).coerceAtLeast(1) else contentSize(w, h)
+        val (cw, ch) = if (isModern()) w to h else contentSize(w, h)
         runCatching { view.updateAppWidgetSize(Bundle(), listOf(SizeF(cw / d, ch / d))) }
     }
 }
