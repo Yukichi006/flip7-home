@@ -48,20 +48,38 @@ class WidgetCell(
     /** ほかの部品と同じくらい、マスの内側に空ける余白。 */
     private val inset = (resources.displayMetrics.density * 4f).toInt()
 
+    /** 中身が実際に必要とする大きさ（測ったもの）。申告の最小の大きさより大きな中身を描くウィジェット（Suica など）があるため。 */
+    private var needW = 0
+    private var needH = 0
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val w = MeasureSpec.getSize(widthMeasureSpec)
         val h = MeasureSpec.getSize(heightMeasureSpec)
         setMeasuredDimension(w, h)
         val child = getChildAt(0) ?: return
+        val aw = (w - inset * 2).coerceAtLeast(1)
+        val ah = (h - inset * 2).coerceAtLeast(1)
+        // 中身を大きさの制限なしで測り、マスに入りきるか確かめる（極端に大きいもの・一覧などは、マスの 2 倍までにとどめる）
+        val content = (child as? android.view.ViewGroup)?.getChildAt(0)
+        if (content != null) {
+            content.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            needW = minOf(content.measuredWidth, aw * 2)
+            needH = minOf(content.measuredHeight, ah * 2)
+        } else {
+            needW = 0; needH = 0
+        }
         val (cw, ch) = contentSize(w, h)
         child.measure(MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY))
     }
 
-    /** ウィジェットを描く大きさ：余白を除いたマスの大きさ。ただし本来の最小の大きさより小さくはしない（あとで縮める）。 */
+    /**
+     * ウィジェットを描く大きさ：余白を除いたマスの大きさ。ただし、申告の最小の大きさや、中身が必要とする大きさより
+     * 小さくはしない（そのときは、あとで縦横の比を保って縮める）。
+     */
     private fun contentSize(w: Int, h: Int): Pair<Int, Int> {
         val aw = (w - inset * 2).coerceAtLeast(1)
         val ah = (h - inset * 2).coerceAtLeast(1)
-        return maxOf(aw, minW) to maxOf(ah, minH)
+        return maxOf(aw, minW, needW) to maxOf(ah, minH, needH)
     }
 
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
