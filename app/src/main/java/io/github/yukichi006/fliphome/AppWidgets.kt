@@ -21,6 +21,9 @@ object AppWidgets {
 
     private var host: AppWidgetHost? = null
 
+    /** 今の指の動きを、ウィジェットの中（一覧など）が使いたがっているか。指を下ろすたびにホーム画面が戻す。 */
+    var touchClaimed = false
+
     fun host(context: Context): AppWidgetHost =
         host ?: AppWidgetHost(context.applicationContext, HOST_ID).also { host = it }
 
@@ -59,17 +62,48 @@ class WidgetCell(
         val child = getChildAt(0) ?: return
         val aw = (w - inset * 2).coerceAtLeast(1)
         val ah = (h - inset * 2).coerceAtLeast(1)
-        // 中身を大きさの制限なしで測り、マスに入りきるか確かめる（極端に大きいもの・一覧などは、マスの 2 倍までにとどめる）
+        // 中身がマスいっぱいに広がる作りでない（決まった大きさの中身の）ときだけ、制限なしで測って、マスに入りきるか確かめる。
+        // 広がる作り（カレンダーの一覧など）は、制限なしで測ると全部を並べた大きさになるので測らない
+        needW = 0; needH = 0
         val content = (child as? android.view.ViewGroup)?.getChildAt(0)
-        if (content != null) {
-            content.measure(MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED), MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
-            needW = minOf(content.measuredWidth, aw * 2)
-            needH = minOf(content.measuredHeight, ah * 2)
-        } else {
-            needW = 0; needH = 0
+        val lp = content?.layoutParams
+        if (content != null && lp != null) {
+            val fixedW = lp.width != android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            val fixedH = lp.height != android.view.ViewGroup.LayoutParams.MATCH_PARENT
+            if (fixedW || fixedH) {
+                content.measure(
+                    if (fixedW) MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED) else MeasureSpec.makeMeasureSpec(aw, MeasureSpec.EXACTLY),
+                    if (fixedH) MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED) else MeasureSpec.makeMeasureSpec(ah, MeasureSpec.EXACTLY),
+                )
+                if (fixedW) needW = minOf(content.measuredWidth, aw * 2)
+                if (fixedH) needH = minOf(content.measuredHeight, ah * 2)
+            }
         }
+        // マスの大きさで測ったとき、中の部品（決まった大きさのカードなど）がマスからはみ出すなら、その大きさも本来の大きさとみなす
+        child.measure(MeasureSpec.makeMeasureSpec(aw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ah, MeasureSpec.EXACTLY))
+        val (ow, oh) = overflow(child, 0, 0, 0)
+        if (ow > aw) needW = maxOf(needW, minOf(ow, aw * 2))
+        if (oh > ah) needH = maxOf(needH, minOf(oh, ah * 2))
         val (cw, ch) = contentSize(w, h)
         child.measure(MeasureSpec.makeMeasureSpec(cw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ch, MeasureSpec.EXACTLY))
+    }
+
+    /** [v] の中の部品のうち、いちばん大きいもの（外側の余白を足した幅・高さ）。4 段の深さまで見る。 */
+    private fun overflow(v: android.view.View, padW: Int, padH: Int, depth: Int): Pair<Int, Int> {
+        var w = v.measuredWidth + padW
+        var h = v.measuredHeight + padH
+        if (v is android.view.ViewGroup && depth < 4) {
+            val pw = padW + v.paddingLeft + v.paddingRight
+            val ph = padH + v.paddingTop + v.paddingBottom
+            for (i in 0 until v.childCount) {
+                val c = v.getChildAt(i)
+                if (c.visibility == GONE) continue
+                val (cw, ch) = overflow(c, pw, ph, depth + 1)
+                w = maxOf(w, cw)
+                h = maxOf(h, ch)
+            }
+        }
+        return w to h
     }
 
     /**
@@ -90,6 +124,15 @@ class WidgetCell(
         longFired = true
         performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
         onLongPress()
+    }
+
+    /**
+     * ウィジェットの中（一覧など）が「この指の動きは自分が使う」と言ってきても、ホーム画面には伝えない。
+     * 代わりに [AppWidgets.touchClaimed] に覚えておき、ホーム画面は上下の動き（一覧のスクロール）だけをウィジェットに任せ、
+     * 左右のスワイプはページの切り替えに使う。
+     */
+    override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+        if (disallowIntercept) AppWidgets.touchClaimed = true
     }
 
     /** 長押しの待ち時間を取り消す（ホーム画面のスワイプが始まったとき）。 */

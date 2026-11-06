@@ -1398,6 +1398,7 @@ class HomeActivity : Activity() {
                     downY = ev.y
                     mode = 0
                     longPressCancelled = false
+                    AppWidgets.touchClaimed = false
                     velocity?.recycle()
                     velocity = VelocityTracker.obtain().also { it.addMovement(ev) }
                 }
@@ -1428,7 +1429,8 @@ class HomeActivity : Activity() {
             if (mode != 0) return
             val dx = ev.x - downX
             val dy = ev.y - downY
-            if (abs(dy) > slop * 1.5f && abs(dy) > abs(dx) * 1.3f) {
+            // ウィジェットの中の一覧が指を使っているときは、上下の動きはウィジェットに任せる（左右はページの切り替え）
+            if (abs(dy) > slop * 1.5f && abs(dy) > abs(dx) * 1.3f && !AppWidgets.touchClaimed) {
                 mode = if (dy < 0) 1 else 2
                 if (mode == 1) {
                     drawer.reset()
