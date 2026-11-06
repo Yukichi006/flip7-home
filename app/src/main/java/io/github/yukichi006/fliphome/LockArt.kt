@@ -33,6 +33,17 @@ object LockArt {
 
     fun enabled(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("on", false)
 
+    /**
+     * ホーム画面の壁紙にも同じ絵を設定するか。Galaxy は「ロック画面の編集」をしたあと、ロック画面の壁紙だけを差し替えても
+     * 前の絵を出し続けることがあるため。ホーム画面の壁紙は FlipHome が布地を描くので、ふだんは見えない。
+     */
+    fun alsoHome(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("home", false)
+
+    fun setAlsoHome(context: Context, on: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("home", on).remove("date").apply()
+        if (enabled(context)) apply(context) {}
+    }
+
     private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
 
     /** ロック画面の壁紙を刺繍にし、毎日自動で描き直す。設定できたかを [done] に渡す。 */
@@ -62,7 +73,8 @@ object LockArt {
         val bitmap = runCatching { render(app, markToday = true) }.getOrNull() ?: return done(false)
         ioThread.execute {
             val ok = runCatching {
-                WallpaperManager.getInstance(app).setBitmap(bitmap, null, true, WallpaperManager.FLAG_LOCK)
+                val which = if (alsoHome(app)) WallpaperManager.FLAG_LOCK or WallpaperManager.FLAG_SYSTEM else WallpaperManager.FLAG_LOCK
+                WallpaperManager.getInstance(app).setBitmap(bitmap, null, true, which)
             }.isSuccess
             if (ok) app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("date", today()).apply()
             mainHandler.post {

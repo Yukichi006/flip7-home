@@ -697,6 +697,14 @@ class HomeActivity : Activity() {
                 true
             }
         }
+        if (LockArt.enabled(this@HomeActivity)) {
+            val home = LockArt.alsoHome(this@HomeActivity)
+            menu.add(if (home) "ホーム画面の壁紙にも設定する：オン（オフにする）" else "ロック画面が切り替わらないとき：ホーム画面の壁紙にも設定する").setOnMenuItemClickListener {
+                LockArt.setAlsoHome(this@HomeActivity, !home)
+                toast(if (!home) "ロック画面とホーム画面の両方に、今日の絵を設定しました" else "次からはロック画面だけに設定します")
+                true
+            }
+        }
         menu.add("ロック画面の壁紙の状態を調べる").setOnMenuItemClickListener {
             android.app.AlertDialog.Builder(this@HomeActivity)
                 .setTitle("ロック画面の壁紙")
