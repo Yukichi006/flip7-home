@@ -185,6 +185,44 @@ fun actionList(context: Context, items: List<Pair<String, () -> Unit>>, note: St
     return ScrollView(context).apply { addView(column) }
 }
 
+/**
+ * まとまりごとに見出しを付けた、押しボタンの一覧（「ホーム画面の設定」など）。見出しは糸の文字と細い縫い目。
+ * [sections] は（見出し, ボタンの一覧）の並び。ボタンの名前に改行を入れると、2 行目を小さく添える。
+ */
+fun sectionedList(context: Context, sections: List<Pair<String, List<Pair<String, () -> Unit>>>>, note: String? = null): View {
+    val column = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, context.dpi(2f), 0, context.dpi(12f))
+    }
+    for ((title, items) in sections) {
+        if (items.isEmpty()) continue
+        column.addView(object : View(context) {
+            private val text = context.threadText(12.5f, bold = true, color = Thread.DIM).apply { letterSpacing = 0.12f }
+            private val seam = context.stitch(0.9f, Thread.FAINT)
+            override fun onDraw(canvas: Canvas) {
+                val y = height * 0.62f
+                canvas.drawText(title, context.dp(10f), y + text.textSize * 0.35f, text)
+                val x = context.dp(10f) + text.measureText(title) + context.dp(10f)
+                canvas.drawLine(x, y, width - context.dp(10f), y, seam)
+            }
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(38f)))
+        for ((label, action) in items) {
+            column.addView(Pill(context, label).apply { setOnClickListener { action() } },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(if ('\n' in label) 64f else 52f)))
+        }
+    }
+    if (note != null) {
+        column.addView(TextView(context).apply {
+            text = note
+            setTextColor(Thread.DIM)
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(0, context.dpi(14f), 0, 0)
+        })
+    }
+    return ScrollView(context).apply { isVerticalScrollBarEnabled = false; addView(column) }
+}
+
 /** 置ける部品（時計・今日の予定・電池）の一覧。 */
 fun modulePicker(context: Context, onPick: (ModuleType) -> Unit): View =
     actionList(

@@ -19,7 +19,6 @@ import android.view.WindowInsetsController
 import android.view.animation.DecelerateInterpolator
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.math.abs
@@ -615,6 +614,8 @@ class HomeActivity : Activity() {
         dock.editing = true
         rebuildHome()
         editBar.visibility = View.VISIBLE
+        // 前に下へ寄せていたら、下に出す
+        editBar.post { editBar.translationY = if (getSharedPreferences("home", 0).getBoolean("editBarBottom", false)) editBarBottomShift() else 0f }
         editBar.alpha = 0f
         editBar.animate().alpha(1f).setDuration(150).start()
     }
@@ -634,7 +635,7 @@ class HomeActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         }
         row.addView(TextView(context).apply {
-            text = "空いたマスをタップして追加\nドラッグで移動・× で外す"
+            text = "空いたマスをタップして追加\nこの帯は上下にずらせます"
             setTextColor(Thread.COLOR)
             textSize = 11.5f
             setShadowLayer(dp(0.6f), 0f, dp(1f), Thread.SHADOW)
@@ -648,135 +649,160 @@ class HomeActivity : Activity() {
         isClickable = true
         val p = dpi(9f)
         setPadding(dpi(22f), p, p, p)
+        // 帯をつまんで上下にずらせる（上のマスに部品を置くときなど）。離すと、上か下の近いほうに寄る
+        var downY = 0f
+        var startT = 0f
+        var dragging = false
+        val slop = ViewConfiguration.get(context).scaledTouchSlop
+        setOnTouchListener { v, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> { downY = ev.rawY; startT = v.translationY; dragging = false }
+                MotionEvent.ACTION_MOVE -> {
+                    val dy = ev.rawY - downY
+                    if (!dragging && abs(dy) > slop) dragging = true
+                    if (dragging) v.translationY = (startT + dy).coerceIn(0f, editBarBottomShift())
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (dragging) {
+                    val bottom = v.translationY > editBarBottomShift() / 2
+                    getSharedPreferences("home", 0).edit().putBoolean("editBarBottom", bottom).apply()
+                    v.animate().translationY(if (bottom) editBarBottomShift() else 0f).setDuration(160).start()
+                }
+            }
+            dragging
+        }
     }
 
-    private fun showEditMenu(anchorView: View) = PopupMenu(this, anchorView).apply {
-        val home = store.home
-        menu.add("ページを足す").setOnMenuItemClickListener {
-            page = store.addPage(page)
-            rebuildHome()
-            toast("${page + 1} ページ目を足しました。空いたマスをタップして、部品やウィジェットを置けます")
-            true
+    /** 編集の帯を下に寄せたときに、どれだけ下げるか（ページの点のすぐ上まで）。 */
+    private fun editBarBottomShift(): Float {
+        val loc = IntArray(2); dots.getLocationInWindow(loc)
+        val r = IntArray(2); root.getLocationInWindow(r)
+        val dotsTop = loc[1] - r[1]
+        return (dotsTop - editBar.height - editBar.top - dpi(4f)).toFloat().coerceAtLeast(0f)
+    }
+
+    /**
+     * 編集モードの「…」：設定を、まとまりごとに分けた一覧で出す。選ぶものが多い設定は、押すと選ぶ一覧に切り替わる（「‹ 戻る」で戻る）。
+     */
+    @Suppress("UNUSED_PARAMETER")
+    private fun showEditMenu(anchorView: View): Unit = openSheet("ホーム画面の設定") { s ->
+        s.setTabs(emptyList(), 0) {}
+        fun back() = showEditMenu(anchorView)
+        /** [title] の選ぶ一覧に切り替える。 */
+        fun choose(title: String, items: List<Pair<String, () -> Unit>>) {
+            s.setTitle(title)
+            s.setBody(actionList(this, listOf("‹ 戻る" to { back() }) + items))
         }
-        if (home.pages.size > 1) {
-            menu.add("このページを外す（${page + 1} ページ目）").setOnMenuItemClickListener {
+        val home = store.home
+        val me = this@HomeActivity
+        val sections = mutableListOf<Pair<String, List<Pair<String, () -> Unit>>>>()
+
+        sections += "ページ" to listOfNotNull(
+            "ページを足す" to {
+                page = store.addPage(page)
+                done()
+                toast("${page + 1} ページ目を足しました。空いたマスをタップして、部品やウィジェットを置けます")
+            },
+            if (home.pages.size > 1) "このページを外す\n${page + 1} ページ目と、そこに置いたもの" to {
                 confirm("${page + 1} ページ目と、そこに置いたものを外します。") {
                     store.modules(page).mapNotNull { it[Module.P_WIDGET]?.toIntOrNull() }
-                        .forEach { runCatching { AppWidgets.host(this@HomeActivity).deleteAppWidgetId(it) } }
+                        .forEach { runCatching { AppWidgets.host(me).deleteAppWidgetId(it) } }
                     store.removePage(page)
                     page = (page - 1).coerceAtLeast(0)
-                    rebuildHome()
+                    done()
                 }
-                true
-            }
-        }
-        gridMenus(home)
-        val bookPeelMenu = menu.addSubMenu("めくれるパネルをめくる向き（いま：${store.bookPeel.label}）")
-        for (p in PeelFrom.entries) bookPeelMenu.add(p.label).setOnMenuItemClickListener { store.bookPeel = p; rebuildHome(); true }
-        val peelMenu = menu.addSubMenu("裏地をめくる向き（いま：${store.peel.label}）")
-        for (p in PeelFrom.entries) {
-            peelMenu.add(p.label).setOnMenuItemClickListener { store.peel = p; rebuildHome(); true }
-        }
-        menu.add(if (store.traceColored) "なぞる刺繍の糸：アイコンの色（生成りにする）" else "なぞる刺繍の糸：生成り（アイコンの色にする）").setOnMenuItemClickListener {
-            store.traceColored = !store.traceColored
-            StitchIcons.colored = store.traceColored
-            rebuildHome()
-            if (drawer.visibility == View.VISIBLE) drawer.rebuild()
-            true
-        }
-        val labelMenu = menu.addSubMenu("パッドのアプリ名（いま：${store.padLabel.label}）")
-        for (l in PadLabel.entries) labelMenu.add(l.label).setOnMenuItemClickListener { store.padLabel = l; rebuildHome(); true }
-        val threadMenu = menu.addSubMenu("糸の太さ（いま：${StitchStyle.label(store.thread)}）")
-        for ((scale, name) in StitchStyle.CHOICES) {
-            threadMenu.add(name).setOnMenuItemClickListener {
-                store.thread = scale
+            } else null,
+            "横の列の数\nいま ${home.cols} 列" to {
+                choose("横の列の数", (LayoutStore.MIN_COLS..LayoutStore.MAX_COLS).map { c -> "$c 列" to { store.setGrid(c, home.rows); done() } })
+            },
+        )
+
+        sections += "下段のポケット" to listOfNotNull(
+            (if (home.pocket) "下段のポケットを隠す" else "下段のポケットを出す") to { store.setPocket(!home.pocket); done() },
+            if (home.pocket) (if (store.dockZip) "ファスナー（アプリ一覧）を外す" else "ファスナー（アプリ一覧）を付ける") to {
+                store.dockZip = !store.dockZip; done()
+            } else null,
+        )
+
+        sections += "めくる・縫う" to listOf(
+            "めくれるパネルをめくる向き\nいま：${store.bookPeel.label}" to {
+                choose("めくれるパネルをめくる向き", PeelFrom.entries.map { p -> p.label to { store.bookPeel = p; done() } })
+            },
+            "パッドの裏地をめくる向き\nいま：${store.peel.label}" to {
+                choose("パッドの裏地をめくる向き", PeelFrom.entries.map { p -> p.label to { store.peel = p; done() } })
+            },
+            "糸の太さ\nいま：${StitchStyle.label(store.thread)}" to {
                 // 糸はあちこちで使っているので、画面をまるごと作り直す
-                recreate()
-                true
-            }
-        }
-        menu.add(if (Badges.enabled(this@HomeActivity)) "通知の印：使っています（設定）" else "通知の印を使う…").setOnMenuItemClickListener {
-            showBadgeSheet()
-            true
-        }
-        if (LockArt.enabled(this@HomeActivity)) {
-            menu.add("ロック画面の刺繍の壁紙をやめる").setOnMenuItemClickListener {
-                LockArt.disable(this@HomeActivity)
+                choose("糸の太さ", StitchStyle.CHOICES.map { (scale, name) -> name to { store.thread = scale; closeSheet(); recreate() } })
+            },
+        )
+
+        sections += "アイコンと名前" to listOf(
+            "なぞる刺繍の糸\nいま：${if (store.traceColored) "アイコンの色" else "生成り"}" to {
+                choose("なぞる刺繍の糸", listOf("アイコンの色" to true, "生成り" to false).map { (label, colored) ->
+                    label to {
+                        store.traceColored = colored
+                        StitchIcons.colored = colored
+                        done()
+                        if (drawer.visibility == View.VISIBLE) drawer.rebuild()
+                    }
+                })
+            },
+            "パッドのアプリ名\nいま：${store.padLabel.label}" to {
+                choose("パッドのアプリ名", PadLabel.entries.map { l -> l.label to { store.padLabel = l; done() } })
+            },
+            (if (Badges.enabled(me)) "通知の印\n使っています（設定）" else "通知の印を使う…") to { closeSheet(); showBadgeSheet() },
+        )
+
+        val lock = LockArt.enabled(me)
+        sections += "ロック画面の壁紙" to listOfNotNull(
+            if (lock) "刺繍の壁紙をやめる" to {
+                LockArt.disable(me); closeSheet()
                 toast("ロック画面の壁紙を、ホーム画面と同じ壁紙に戻しました")
-                true
-            }
-        } else {
-            menu.add("ロック画面の壁紙を刺繍にする（毎日自動で更新）").setOnMenuItemClickListener {
+            } else "刺繍の壁紙にする\n毎日自動で更新" to {
+                closeSheet()
                 toast("ステッチの壁紙を描いています…")
-                LockArt.enable(this@HomeActivity) { ok ->
+                LockArt.enable(me) { ok ->
                     toast(if (ok) "ロック画面の壁紙を設定しました。日付が変わるたびに描き直します" else "ロック画面の壁紙を設定できませんでした")
                 }
-                true
-            }
-        }
-        if (LockArt.enabled(this@HomeActivity)) {
-            val home = LockArt.alsoHome(this@HomeActivity)
-            menu.add(if (home) "ホーム画面の壁紙にも設定する：オン（オフにする）" else "ロック画面が切り替わらないとき：ホーム画面の壁紙にも設定する").setOnMenuItemClickListener {
-                LockArt.setAlsoHome(this@HomeActivity, !home)
-                toast(if (!home) "ロック画面とホーム画面の両方に、今日の絵を設定しました" else "次からはロック画面だけに設定します")
-                true
-            }
-        }
-        menu.add("ロック画面の壁紙の状態を調べる").setOnMenuItemClickListener {
-            android.app.AlertDialog.Builder(this@HomeActivity)
-                .setTitle("ロック画面の壁紙")
-                .setMessage(LockArt.describe(this@HomeActivity) +
-                    "\n\nロック画面がほかのアプリの「動く壁紙」になっていると、FlipHome の絵より手前に出ます。" +
-                    "Galaxy の「壁紙とスタイル」でロック画面に静止画を選び直してから、もう一度「刺繍にする」を押してください。")
-                .setPositiveButton("閉じる", null)
-                .show()
-            true
-        }
-        menu.add("ロック画面の壁紙を保存して自分で設定する…").setOnMenuItemClickListener {
-            toast("ステッチの壁紙を描いています…")
-            LockArt.saveAndOpen(this@HomeActivity) { err ->
-                if (err != null) toast(err)
-                else toast("開いた画面で「ロック画面」を選んで設定してください（ギャラリーの Pictures/FlipHome にも保存しました）")
-            }
-            true
-        }
-        menu.add("MPC の配置を読み込む…").setOnMenuItemClickListener {
-            val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
-                .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream"))
-            @Suppress("DEPRECATION")
-            runCatching { startActivityForResult(pick, REQUEST_IMPORT) }
-            true
-        }
-        menu.add("アプリ一覧を開く").setOnMenuItemClickListener { exitEdit(); openDrawer(); true }
-        menu.add("ホームアプリを切り替える").setOnMenuItemClickListener {
-            runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
-            true
-        }
-        menu.add("FlipHome ${versionName()}").isEnabled = false
-    }.show()
+            },
+            if (lock) {
+                val also = LockArt.alsoHome(me)
+                (if (also) "ホーム画面の壁紙にも設定：オン\n押すとオフ" else "ホーム画面の壁紙にも設定する\nロック画面が切り替わらないとき") to {
+                    LockArt.setAlsoHome(me, !also); closeSheet()
+                    toast(if (!also) "ロック画面とホーム画面の両方に、今日の絵を設定しました" else "次からはロック画面だけに設定します")
+                }
+            } else null,
+            "壁紙の状態を調べる" to {
+                android.app.AlertDialog.Builder(me)
+                    .setTitle("ロック画面の壁紙")
+                    .setMessage(LockArt.describe(me) +
+                        "\n\nロック画面がほかのアプリの「動く壁紙」になっていると、FlipHome の絵より手前に出ます。" +
+                        "Galaxy の「壁紙とスタイル」でロック画面に静止画を選び直してから、もう一度「刺繍にする」を押してください。")
+                    .setPositiveButton("閉じる", null)
+                    .show()
+            },
+            "保存して自分で設定する…" to {
+                closeSheet()
+                toast("ステッチの壁紙を描いています…")
+                LockArt.saveAndOpen(me) { err ->
+                    if (err != null) toast(err)
+                    else toast("開いた画面で「ロック画面」を選んで設定してください（ギャラリーの Pictures/FlipHome にも保存しました）")
+                }
+            },
+        )
 
-    /** マス目の設定（列の数、下段のポケット）。行の数は画面の高さから決まる。 */
-    private fun PopupMenu.gridMenus(home: Home) {
-        val cols = menu.addSubMenu("横の列の数（いま ${home.cols}）")
-        for (c in LayoutStore.MIN_COLS..LayoutStore.MAX_COLS) {
-            cols.add("$c 列").setOnMenuItemClickListener { store.setGrid(c, home.rows); rebuildHome(); true }
-        }
-        menu.add(if (home.pocket) "下段のポケットを隠す" else "下段のポケットを出す").setOnMenuItemClickListener {
-            store.setPocket(!home.pocket)
-            rebuildHome()
-            true
-        }
-        zipMenu(home)
-    }
-
-    /** 下段のポケットの口のファスナー（アプリ一覧）を付ける・外す。 */
-    private fun PopupMenu.zipMenu(home: Home) {
-        if (!home.pocket) return
-        menu.add(if (store.dockZip) "下段のファスナー（アプリ一覧）を外す" else "下段のファスナー（アプリ一覧）を付ける").setOnMenuItemClickListener {
-            store.dockZip = !store.dockZip
-            rebuildHome()
-            true
-        }
+        sections += "そのほか" to listOf(
+            "アプリ一覧を開く" to { closeSheet(); exitEdit(); openDrawer() },
+            "MPC の配置を読み込む…" to {
+                closeSheet()
+                val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                    .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/json", "text/plain", "application/octet-stream"))
+                @Suppress("DEPRECATION")
+                runCatching { startActivityForResult(pick, REQUEST_IMPORT) }
+            },
+            "ホームアプリを切り替える" to { closeSheet(); runCatching { startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) } },
+        )
+        s.setBody(sectionedList(this, sections, note = "FlipHome ${versionName()}"))
     }
 
     private fun confirm(message: String, ok: () -> Unit) {
