@@ -343,6 +343,52 @@ fun genrePicker(context: Context, current: Genre?, onPick: (Genre?) -> Unit): Vi
     }
 }
 
+/**
+ * やることを 1 行書く欄と「留める」「続けて書く」。キーボードの決定でも留まる。
+ * [onPin] には、書いた文字と、書く欄を開いたままにするか（続けて書くとき true）を渡す。
+ */
+fun taskInput(context: Context, onPin: (String, Boolean) -> Unit): View {
+    val column = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, context.dpi(10f), 0, 0)
+    }
+    val edit = EditText(context).apply {
+        background = null
+        setTextColor(Thread.COLOR)
+        setHintTextColor(Thread.DIM)
+        hint = "例：牛乳を買う"
+        textSize = 17f
+        isSingleLine = true
+        imeOptions = EditorInfo.IME_ACTION_DONE
+        setPadding(context.dpi(8f), 0, context.dpi(8f), 0)
+    }
+    fun pin(keep: Boolean) {
+        val t = edit.text.toString().trim()
+        if (t.isEmpty()) return
+        edit.setText("")
+        onPin(t, keep)
+    }
+    column.addView(PatchLayout(context, PatchPainter.Shape.Round(40f)).apply {
+        addView(edit, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(64f)))
+    val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+    row.addView(Pill(context, "続けて書く").apply { setOnClickListener { pin(true) } },
+        LinearLayout.LayoutParams(0, context.dpi(54f), 1f))
+    row.addView(Pill(context, "留める", selected = true).apply { setOnClickListener { pin(false) } },
+        LinearLayout.LayoutParams(0, context.dpi(54f), 1f))
+    column.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dpi(10f) })
+    column.addView(TextView(context).apply {
+        text = "名札をタップで済み、横へスワイプで外す、長押しでいちばん上へ。書いたことはスマホの中だけに保存します。"
+        setTextColor(Thread.DIM)
+        textSize = 12.5f
+        setPadding(context.dpi(8f), context.dpi(12f), context.dpi(8f), 0)
+    })
+    edit.setOnEditorActionListener { _, _, _ -> pin(false); true }
+    edit.requestFocus()
+    edit.post { context.getSystemService(InputMethodManager::class.java)?.showSoftInput(edit, 0) }
+    return column
+}
+
 /** 名前を入力する欄と「保存」「元に戻す」。[original] は付け替える前の名前（元に戻すと null を渡す）。 */
 fun renameBody(context: Context, current: String, original: String?, onSave: (String?) -> Unit): View {
     val column = LinearLayout(context).apply {

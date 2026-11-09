@@ -47,6 +47,7 @@ enum class ModuleType(
     WIDGET("アプリのウィジェット", "ほかのアプリのウィジェット（Suica の残高、カレンダーなど）", 3, 2, true),
     ALARM("次のアラーム", "次に鳴るアラームを刺繍の数字で（タップで時計アプリ）", 2, 1, true),
     EVENTS("ひと月の予定", "今月のマス目に、その日の予定を小さく縫う", 5, 4, true, minW = 3, minH = 2),
+    TASKS("縫い付けメモ", "やることを書いた名札を、まち針で留めておく", 3, 3, true, minW = 2, minH = 2),
     BOOK("めくれるパネル", "アプリを並べた布。角をめくると次の布が出る（2×2 から）", 3, 4, true, minW = 2, minH = 2),
 }
 
@@ -112,6 +113,9 @@ data class Module(
         const val P_LON = "lon"
         const val P_MINMAX = "minmax"
         const val P_TAP_APP = "tapApp"
+
+        /** 縫い付けメモの名札（JSON）。 */
+        const val P_TASKS = "tasks"
 
         /** めくれるパネルの布の中身（JSON）。 */
         const val P_SHEETS = "sheets"

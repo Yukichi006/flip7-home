@@ -286,6 +286,32 @@ class HomeActivity : Activity() {
         g.editing = editing
     }
 
+    /** 縫い付けメモ [m]。書き足し・済み・外すは、その場で保存する（ページは作り直さない）。 */
+    private fun pinBoardView(m: Module): View {
+        val onPage = page
+        fun save(list: List<PinTask>) {
+            val board = store.gridBoard(onPage)
+            val cur = board.modules().firstOrNull { it.id == m.id } ?: return
+            board.replace(cur.with(Module.P_TASKS, PinTask.toJson(list)))
+        }
+        lateinit var view: PinBoardView
+        view = PinBoardView(this, PinTask.parse(m[Module.P_TASKS]), ::save) {
+            if (editing) return@PinBoardView
+            openSheet("やることを留める") { s ->
+                s.setTabs(emptyList(), 0) {}
+                s.setBody(taskInput(this) { text, keepOpen ->
+                    val cur = store.gridBoard(onPage).modules().firstOrNull { it.id == m.id } ?: return@taskInput
+                    val list = listOf(PinTask(text)) + PinTask.parse(cur[Module.P_TASKS])
+                    save(list)
+                    view.setTasks(list, pinnedNew = true)
+                    if (!keepOpen) closeSheet()
+                })
+            }
+        }
+        view.isClickable = true
+        return view
+    }
+
     /** めくれるパネル [m]：今の布と、その下の次の布。角をめくりきると次の布になる。中のマス目は、パネルの大きさ（マスの数）。 */
     private fun bookView(m: Module): View {
         val sheets = m.sheets
@@ -328,6 +354,7 @@ class HomeActivity : Activity() {
             ModuleType.WIDGET -> widgetView(m) ?: return null
             ModuleType.BOOK -> bookView(m)
             ModuleType.ALARM -> NextAlarmView(this)
+            ModuleType.TASKS -> pinBoardView(m)
             ModuleType.EVENTS -> MonthEventsView(this)
             ModuleType.AGENDA -> AgendaView(this)
             ModuleType.BATTERY -> BatteryPatch(this)
