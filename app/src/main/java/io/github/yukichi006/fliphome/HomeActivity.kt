@@ -369,6 +369,8 @@ class HomeActivity : Activity() {
         // ワッペンの絵を自分で描く部品は、枠を描くかどうかだけ伝える（描かなければ中身が大きくなる）
         (view as? PatchView)?.framed = framed
         (view as? ZipperFader)?.framed = framed
+        // ほかのアプリのウィジェットは、大きさはそのままで、縁の少し内側をステッチで縫う
+        if (view is WidgetCell) { view.stitched = framed; return view }
         if ((m.type !in BARE && m.type != ModuleType.WIDGET) || !framed) return view
         // 布のない部品（時計・カレンダー・天気など）は、ワッペンに載せる
         return PatchLayout(this, PatchPainter.Shape.Round(22f)).apply {
@@ -402,7 +404,13 @@ class HomeActivity : Activity() {
     private fun frameItem(m: Module): Pair<String, () -> Unit>? {
         if (m.type !in FRAMEABLE) return null
         val now = isFramed(m, true)
-        return (if (now) "ステッチの枠をなくす（中身を大きく）" else "ステッチの枠を付ける") to {
+        val label = when {
+            m.type == ModuleType.WIDGET && now -> "縁のステッチをなくす"
+            m.type == ModuleType.WIDGET -> "縁にステッチを縫う（大きさはそのまま）"
+            now -> "ステッチの枠をなくす（中身を大きく）"
+            else -> "ステッチの枠を付ける"
+        }
+        return label to {
             board().replace(m.with(Module.P_FRAME, if (now) "0" else "1"))
             done()
         }

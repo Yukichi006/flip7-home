@@ -146,6 +146,37 @@ class WidgetCell(
         if (disallowIntercept) AppWidgets.touchClaimed = true
     }
 
+    /**
+     * ウィジェットの縁の少し内側を、ステッチで縫うか（大きさはそのまま。ウィジェットの絵の上に縫い目を重ねる）。
+     */
+    var stitched = false
+        set(value) { field = value; setWillNotDraw(!value); invalidate() }
+
+    private val seam = run {
+        val d = resources.displayMetrics.density
+        stitchPaint(d * 1.3f, d * 4f, d * 2.9f, 0xE6EFEBE2.toInt())
+    }
+    private val seamRect = android.graphics.RectF()
+
+    override fun dispatchDraw(canvas: android.graphics.Canvas) {
+        super.dispatchDraw(canvas)
+        if (!stitched) return
+        val host = getChildAt(0) as? android.appwidget.AppWidgetHostView ?: return
+        val bg = findBackground(host) ?: host
+        // 土台の、画面の上での四角（縮めて収めているときも合わせる）
+        var l = 0f; var t = 0f
+        var v: android.view.View = bg
+        while (v !== host) { l += v.left; t += v.top; v = v.parent as? android.view.View ?: break }
+        val s = host.scaleX
+        val x0 = host.translationX + host.left + l * s
+        val y0 = host.translationY + host.top + t * s
+        val d = resources.displayMetrics.density
+        val inset = d * 6f
+        seamRect.set(x0 + inset, y0 + inset, x0 + bg.width * s - inset, y0 + bg.height * s - inset)
+        val r = (cornerRadius() - inset).coerceAtLeast(d * 4f)
+        canvas.drawRoundRect(seamRect, r, r, seam)
+    }
+
     /** 長押しの待ち時間を取り消す（ホーム画面のスワイプが始まったとき）。 */
     fun cancelPendingLongPress() = removeCallbacks(longPress)
 
