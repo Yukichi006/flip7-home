@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- ロック画面の刺繍の「動く壁紙」の説明（壁紙を選ぶ画面に出る） -->
-<wallpaper xmlns:android="http://schemas.android.com/apk/res/android"
-    android:description="@string/lock_wallpaper_desc"
-    android:thumbnail="@mipmap/ic_launcher" />
