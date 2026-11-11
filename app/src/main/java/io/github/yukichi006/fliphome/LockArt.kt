@@ -69,7 +69,7 @@ object LockArt {
         val again = prefs.getBoolean("again", false) &&
             context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != true
         if (!again && prefs.getString("date", null) == today()) return
-        prefs.edit().remove("again").apply()
+        if (again) prefs.edit().remove("again").apply()
         apply(context) {}
     }
 
