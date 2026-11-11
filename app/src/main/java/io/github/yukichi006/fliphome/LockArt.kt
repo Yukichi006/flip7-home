@@ -63,7 +63,13 @@ object LockArt {
     fun refreshIfNeeded(context: Context) {
         if (!enabled(context)) return
         scheduleMidnight(context)
-        if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("date", null) == today()) return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        // 日付の変わり目（たいてい画面が消えてロック中）に設定した絵を、Galaxy はロック画面に出さないことがある。
+        // ロックを解いて使っている間に設定した絵は出るので、その日はじめて FlipHome が見えたときに、もう一度設定する
+        val again = prefs.getBoolean("again", false) &&
+            context.getSystemService(android.app.KeyguardManager::class.java)?.isKeyguardLocked != true
+        if (!again && prefs.getString("date", null) == today()) return
+        prefs.edit().remove("again").apply()
         apply(context) {}
     }
 
@@ -174,7 +180,8 @@ object LockArt {
         override fun onReceive(context: Context, intent: Intent) {
             if (!enabled(context)) return
             val pending = goAsync()
-            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove("date").apply()
+            // 今日の絵を設定しておき、ロックを解いたあとでもう一度設定する印も付ける（[refreshIfNeeded]）
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove("date").putBoolean("again", true).apply()
             apply(context) { pending.finish() }
         }
     }
