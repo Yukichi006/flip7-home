@@ -1,7 +1,9 @@
 package io.github.yukichi006.fliphome
 
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.app.WallpaperManager
-import android.content.ComponentName
+import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -10,8 +12,6 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.net.Uri
 import android.provider.MediaStore
-import android.service.wallpaper.WallpaperService
-import android.view.SurfaceHolder
 import android.view.View
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -21,36 +21,120 @@ import java.util.Locale
  * ロック画面の壁紙を、ホーム画面と同じ「黒い布地に白いステッチ」で描く。
  * Android ではロック画面そのものは作り替えられないので、壁紙として描く（Galaxy の時計やショートカットは、その上に重なる）。
  *
- * - **動く壁紙**（[openPicker]、[LockWallpaper]）：FlipHome 自身が壁紙として動き、ロック画面が出るたびに自分で描く。
- *   画像を毎日差し替える前のやり方は、Galaxy が「ロック画面の編集」を開くまで古い絵を出し続けたのでやめた。
- *   動く壁紙は絵を Galaxy に渡さず、その場で描くので、日付が変わればそのまま今日の印が動く。
- * - **手動**（[saveAndOpen]）：動く壁紙を使いたくないとき用。ギャラリーに保存して、Galaxy の「壁紙に設定」の画面を開く。
+ * - **自動**（[enable]）：ロック画面の壁紙に直接設定し、日付が変わるたびに描き直す（今日の印が毎日動く）。
+ *   日付が変わったときは [MidnightReceiver] で、ほかに FlipHome を開いたときにも、今日の分になっているか確かめる。
+ * - **手動**（[saveAndOpen]）：自動でうまく変わらないとき用。ギャラリーに保存して、Galaxy の「壁紙に設定」の画面を開く。
  *   ひと月使えるよう、今日の印は付けない。
  *
  * 上の 3 割ほどは Galaxy の時計のために空けておき、その下に、刺繍の月のカレンダーを縫い付けたワッペンを置く。
  */
 object LockArt {
-    private fun component(context: Context) = ComponentName(context, LockWallpaper::class.java)
+    private const val PREFS = "lock"
 
-    private fun liveInfo(context: Context, which: Int) = runCatching {
-        val wm = WallpaperManager.getInstance(context)
-        if (android.os.Build.VERSION.SDK_INT >= 34) wm.getWallpaperInfo(which) else if (which == WallpaperManager.FLAG_SYSTEM) wm.wallpaperInfo else null
-    }.getOrNull()
-
-    /** FlipHome の動く壁紙が、いま壁紙に設定されているか。 */
-    fun active(context: Context) =
-        liveInfo(context, WallpaperManager.FLAG_LOCK)?.component == component(context) ||
-            liveInfo(context, WallpaperManager.FLAG_SYSTEM)?.component == component(context)
+    fun enabled(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("on", false)
 
     /**
-     * FlipHome の動く壁紙を設定する画面（Galaxy のプレビュー）を開く。そこで「ホーム画面とロック画面」を選んでもらう。
-     * 開けたかを返す。
+     * ホーム画面の壁紙にも同じ絵を設定するか。Galaxy は「ロック画面の編集」をしたあと、ロック画面の壁紙だけを差し替えても
+     * 前の絵を出し続けることがあるため。ホーム画面の壁紙は FlipHome が布地を描くので、ふだんは見えない。
      */
-    fun openPicker(context: Context): Boolean {
-        val direct = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER)
-            .putExtra(WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT, component(context))
-        return runCatching { context.startActivity(direct) }.isSuccess ||
-            runCatching { context.startActivity(Intent(WallpaperManager.ACTION_LIVE_WALLPAPER_CHOOSER)) }.isSuccess
+    fun alsoHome(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("home", false)
+
+    fun setAlsoHome(context: Context, on: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("home", on).remove("date").apply()
+        if (enabled(context)) apply(context) {}
+    }
+
+    private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
+
+    /** ロック画面の壁紙を刺繍にし、毎日自動で描き直す。設定できたかを [done] に渡す。 */
+    fun enable(context: Context, done: (Boolean) -> Unit) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("on", true).apply()
+        apply(context, done)
+    }
+
+    /** 自動をやめ、ロック画面の壁紙を元に戻す（ホーム画面と同じ壁紙になる）。 */
+    fun disable(context: Context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("on", false).remove("date").apply()
+        context.getSystemService(AlarmManager::class.java)?.cancel(midnightIntent(context))
+        runCatching { WallpaperManager.getInstance(context).clear(WallpaperManager.FLAG_LOCK) }
+    }
+
+    /** 自動にしていて、まだ今日の分を描いていなければ描き直す（次の日付の変わり目の予約もし直す）。 */
+    fun refreshIfNeeded(context: Context) {
+        if (!enabled(context)) return
+        scheduleMidnight(context)
+        if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("date", null) == today()) return
+        apply(context) {}
+    }
+
+    /**
+     * 壁紙を Galaxy に渡すやり方。Galaxy は、アプリが差し替えたロック画面の壁紙を「ロック画面の編集」を開くまで
+     * 表示に使わないことがあるので、渡し方をいくつか用意して、効くものを持ち主が選べるようにする。
+     */
+    enum class Method(val label: String) {
+        PLAIN("そのまま設定する（今まで）"),
+        CLEAR_FIRST("いったん消してから設定する"),
+        STREAM("画像ファイルとして渡す"),
+        CROP("表示する範囲を付けて設定する"),
+        TWICE("二度続けて設定する"),
+    }
+
+    fun method(context: Context): Method =
+        Method.entries.getOrElse(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt("method", 0)) { Method.PLAIN }
+
+    /**
+     * 渡し方を [method] に変え、効いたか見分けられるよう「テスト：…」の文字を入れた絵をすぐに設定する。
+     * 文字は、次に描き直したとき（[redraw] か、日付が変わったとき）に消える。
+     */
+    fun test(context: Context, method: Method, done: (Boolean) -> Unit) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt("method", method.ordinal).remove("date").apply()
+        val time = SimpleDateFormat("H:mm:ss", Locale.US).format(Calendar.getInstance().time)
+        apply(context, "テスト ${method.ordinal + 1}：${method.label}　$time", done)
+    }
+
+    /** 今日の絵に描き直す（テストの文字を消す）。 */
+    fun redraw(context: Context, done: (Boolean) -> Unit) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove("date").apply()
+        apply(context, null, done)
+    }
+
+    private fun apply(context: Context, done: (Boolean) -> Unit) = apply(context, null, done)
+
+    private fun apply(context: Context, label: String?, done: (Boolean) -> Unit) {
+        val app = context.applicationContext
+        // 布地やカレンダーは画面の部品と同じ描き方なので、描くのはメインスレッド、壁紙の設定は裏のスレッドで行う
+        val bitmap = runCatching { render(app, markToday = true, label = label) }.getOrNull() ?: return done(false)
+        val how = method(app)
+        ioThread.execute {
+            val ok = runCatching {
+                val which = if (alsoHome(app)) WallpaperManager.FLAG_LOCK or WallpaperManager.FLAG_SYSTEM else WallpaperManager.FLAG_LOCK
+                val wm = WallpaperManager.getInstance(app)
+                when (how) {
+                    Method.PLAIN -> wm.setBitmap(bitmap, null, true, which)
+                    Method.CLEAR_FIRST -> {
+                        runCatching { wm.clear(WallpaperManager.FLAG_LOCK) }
+                        java.lang.Thread.sleep(800)
+                        wm.setBitmap(bitmap, null, true, which)
+                    }
+                    Method.STREAM -> {
+                        val png = java.io.ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+                        wm.setStream(java.io.ByteArrayInputStream(png), null, true, which)
+                    }
+                    Method.CROP -> wm.setBitmap(bitmap, android.graphics.Rect(0, 0, bitmap.width, bitmap.height), true, which)
+                    Method.TWICE -> {
+                        wm.setBitmap(bitmap, null, true, which)
+                        java.lang.Thread.sleep(800)
+                        wm.setBitmap(bitmap, null, true, which)
+                    }
+                }
+            }.isSuccess
+            // テストの文字を入れた絵は「今日の分」に数えない（次に開いたときや日付が変わったときに、ふつうの絵に描き直す）
+            if (ok && label == null) app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("date", today()).apply()
+            mainHandler.post {
+                scheduleMidnight(app)
+                done(ok)
+            }
+        }
     }
 
     /**
@@ -61,14 +145,38 @@ object LockArt {
         val wm = WallpaperManager.getInstance(context)
         val pm = context.packageManager
         fun live(which: Int): String? {
-            val info = liveInfo(context, which) ?: return null
-            if (info.component == component(context)) return "FlipHome の刺繍（動く壁紙）"
+            val info = runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= 34) wm.getWallpaperInfo(which) else if (which == WallpaperManager.FLAG_SYSTEM) wm.wallpaperInfo else null
+            }.getOrNull() ?: return null
             return "動く壁紙「${runCatching { info.loadLabel(pm) }.getOrDefault("?")}」（${info.packageName}）"
         }
         val lockId = runCatching { wm.getWallpaperId(WallpaperManager.FLAG_LOCK) }.getOrDefault(-1)
         val lock = live(WallpaperManager.FLAG_LOCK) ?: if (lockId > 0) "静止画（番号 $lockId）" else "ホーム画面と同じ"
         val home = live(WallpaperManager.FLAG_SYSTEM) ?: "静止画"
-        return "ロック画面：$lock\nホーム画面：$home\n最後に描いた日：${LockWallpaper.lastDrawn ?: "まだ（FlipHome が動き直してから）"}"
+        val auto = if (enabled(context)) "オン（最後に描いた日：${context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("date", null) ?: "まだ"}）" else "オフ"
+        return "ロック画面：$lock\nホーム画面：$home\nFlipHome の自動更新：$auto"
+    }
+
+    private fun midnightIntent(context: Context): PendingIntent =
+        PendingIntent.getBroadcast(context, 0, Intent(context, MidnightReceiver::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+    /** 次の日付の変わり目（0 時を少し過ぎたころ）に描き直す予約をする（時刻ぴったりでなくてよいので、正確なアラームは使わない）。 */
+    private fun scheduleMidnight(context: Context) {
+        val next = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, 1)
+            set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 30); set(Calendar.MILLISECOND, 0)
+        }
+        runCatching { context.getSystemService(AlarmManager::class.java)?.setAndAllowWhileIdle(AlarmManager.RTC, next.timeInMillis, midnightIntent(context)) }
+    }
+
+    /** 日付が変わったときに呼ばれ、ロック画面の壁紙を今日の分に描き直す。 */
+    class MidnightReceiver : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (!enabled(context)) return
+            val pending = goAsync()
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove("date").apply()
+            apply(context) { pending.finish() }
+        }
     }
 
     /** 絵を描いてギャラリーに保存し、壁紙に設定する画面を開く。うまくいかなければ理由を [done] に渡す。 */
@@ -106,19 +214,14 @@ object LockArt {
         return uri
     }
 
-    /** 画面の大きさの壁紙を、画像として描く（保存して自分で設定するとき）。 */
-    fun render(context: Context, markToday: Boolean): Bitmap {
+    /** 画面の大きさの壁紙を描く。[markToday] なら、カレンダーに今日の印を付ける（毎日描き直すとき）。 */
+    fun render(context: Context, markToday: Boolean, label: String? = null): Bitmap {
         // 画面いっぱいの大きさ（取れなければ Flip7 のメイン画面の大きさ）
         val bounds = context.getSystemService(android.view.WindowManager::class.java)?.maximumWindowMetrics?.bounds
         val w = bounds?.width()?.takeIf { it > 0 } ?: 1080
         val h = bounds?.height()?.takeIf { it > 0 } ?: 2520
         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        draw(context, Canvas(bitmap), w, h, markToday)
-        return bitmap
-    }
-
-    /** 幅 [w]・高さ [h] の壁紙を [canvas] に描く。[markToday] なら、カレンダーに今日の印を付ける（動く壁紙のとき）。 */
-    fun draw(context: Context, canvas: Canvas, w: Int, h: Int, markToday: Boolean) {
+        val canvas = Canvas(bitmap)
         canvas.drawPaint(Fabric.paint(context, Cloth.BASE))
         // 画面の縁のステッチ
         val inset = context.dp(5f)
@@ -140,7 +243,7 @@ object LockArt {
         canvas.save()
         canvas.translate(side, patchTop)
         PatchPainter(context, PatchPainter.Shape.Round(28f)).draw(canvas, pw, ph)
-        // カレンダーは、ホーム画面の「月のカレンダー」の部品をそのまま描く
+        // カレンダーは、ホーム画面の「月のカレンダー」の部品をそのまま描く（今日の印は付けない）
         val cal = DotCalendarView(context, mondayFirst = false, hasSwipe = { false }, onSwipe = {}, markToday = markToday, showMonth = false)
         val pad = context.dpi(18f)
         cal.measure(View.MeasureSpec.makeMeasureSpec(pw - pad * 2, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(ph - pad * 2, View.MeasureSpec.EXACTLY))
@@ -152,62 +255,11 @@ object LockArt {
         // 下の飾り：二本の縫い目
         val y = patchBottom + context.dp(28f)
         canvas.drawDoubleSeam(side + context.dp(30f), w - side - context.dp(30f), y, context.dp(5f), context.stitch(1.0f, Thread.DIM))
-    }
-}
-
-/**
- * ロック画面（とホーム画面）の「動く壁紙」。刺繍のカレンダーを、その場で描く。
- *
- * 動くのは、壁紙が見えるようになったとき（ロック画面が出たとき）だけで、日付が変わっていなければ何もしない
- * （アニメーションはしないので、電池はほとんど使わない）。画面が点いたことなどの知らせは受け取らない
- * （0.34.0 では受け取っていたが、Play プロテクトに有害と判定されたのでやめた）。
- * 通信も、ほかの壁紙の読み取りもしない。Android の決まりで、システム（壁紙の仕組み）だけがこのサービスにつなげる。
- */
-class LockWallpaper : WallpaperService() {
-    override fun onCreateEngine(): Engine = ArtEngine()
-
-    private inner class ArtEngine : Engine() {
-        private var width = 0
-        private var height = 0
-        /** 最後に描いた日（同じ日なら描き直さない）。 */
-        private var drawn: String? = null
-
-        override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {
-            super.onSurfaceChanged(holder, format, w, h)
-            width = w
-            height = h
-            draw(force = true)
+        // 渡し方を試しているときは、どの渡し方でいつ設定した絵かを書く（ロック画面で効いたか見分けるため）
+        if (label != null) {
+            val text = context.threadText(13f, bold = true, color = Thread.ALERT).apply { textAlign = Paint.Align.CENTER }
+            canvas.drawText(label, w / 2f, y + context.dp(34f), text)
         }
-
-        override fun onSurfaceRedrawNeeded(holder: SurfaceHolder) {
-            super.onSurfaceRedrawNeeded(holder)
-            draw(force = true)
-        }
-
-        override fun onVisibilityChanged(visible: Boolean) {
-            if (visible) draw(force = false)
-        }
-
-        private fun draw(force: Boolean) {
-            if (width <= 0 || height <= 0) return
-            val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Calendar.getInstance().time)
-            if (!force && drawn == today) return
-            val holder = surfaceHolder
-            val canvas = runCatching { holder.lockCanvas() }.getOrNull() ?: return
-            try {
-                LockArt.draw(this@LockWallpaper, canvas, width, height, markToday = true)
-                drawn = today
-                lastDrawn = today
-            } catch (e: Exception) {
-                // 描けなくても壁紙ごと落ちないようにする（次に見えたときにもう一度描く）
-            } finally {
-                runCatching { holder.unlockCanvasAndPost(canvas) }
-            }
-        }
-    }
-
-    companion object {
-        /** 最後に描いた日（「壁紙の状態を調べる」用。FlipHome が動いている間だけ覚えている）。 */
-        @Volatile var lastDrawn: String? = null
+        return bitmap
     }
 }

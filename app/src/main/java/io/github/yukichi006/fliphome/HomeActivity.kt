@@ -161,6 +161,8 @@ class HomeActivity : Activity() {
         if (!ready) return
         banner.visibility = if (isDefaultHome()) View.GONE else View.VISIBLE
         refreshModules()
+        // ロック画面の刺繍の壁紙が、今日の分になっているか（電源を入れ直して予約が消えたときなど）
+        LockArt.refreshIfNeeded(this)
     }
 
     override fun onStart() {
@@ -778,19 +780,47 @@ class HomeActivity : Activity() {
             (if (Badges.enabled(me)) "通知の印\n使っています（設定）" else "通知の印を使う…") to { closeSheet(); showBadgeSheet() },
         )
 
-        val lock = LockArt.active(me)
-        sections += "ロック画面の壁紙" to listOf(
-            (if (lock) "刺繍の壁紙：使っています\n設定の画面をもう一度開く" else "刺繍の壁紙にする…\n日付は自動で変わる（動く壁紙）") to {
+        val lock = LockArt.enabled(me)
+        sections += "ロック画面の壁紙" to listOfNotNull(
+            if (lock) "刺繍の壁紙をやめる" to {
+                LockArt.disable(me); closeSheet()
+                toast("ロック画面の壁紙を、ホーム画面と同じ壁紙に戻しました")
+            } else "刺繍の壁紙にする\n毎日自動で更新" to {
                 closeSheet()
-                if (LockArt.openPicker(me)) toast("開いた画面で「ホーム画面とロック画面」を選んでください")
-                else toast("壁紙の画面を開けませんでした。Galaxy の「壁紙とスタイル」から FlipHome を選んでください")
+                toast("ステッチの壁紙を描いています…")
+                LockArt.enable(me) { ok ->
+                    toast(if (ok) "ロック画面の壁紙を設定しました。日付が変わるたびに描き直します" else "ロック画面の壁紙を設定できませんでした")
+                }
             },
+            if (lock) {
+                val also = LockArt.alsoHome(me)
+                (if (also) "ホーム画面の壁紙にも設定：オン\n押すとオフ" else "ホーム画面の壁紙にも設定する\nロック画面が切り替わらないとき") to {
+                    LockArt.setAlsoHome(me, !also); closeSheet()
+                    toast(if (!also) "ロック画面とホーム画面の両方に、今日の絵を設定しました" else "次からはロック画面だけに設定します")
+                }
+            } else null,
+            if (lock) "切り替わらないとき：渡し方を試す\nいま：${LockArt.method(me).label}" to {
+                choose("壁紙の渡し方を試す", LockArt.Method.entries.map { m ->
+                    m.label to {
+                        closeSheet()
+                        toast("設定しています…")
+                        LockArt.test(me, m) { ok ->
+                            toast(if (ok) "設定しました。画面を消してロック画面を見て、下に「テスト ${m.ordinal + 1}」と今の時刻が出ていれば、この渡し方が効いています"
+                            else "この渡し方では設定できませんでした")
+                        }
+                    }
+                })
+            } else null,
+            if (lock) "今日の絵に描き直す\nテストの文字を消す" to {
+                closeSheet()
+                LockArt.redraw(me) { ok -> toast(if (ok) "今日の絵に描き直しました" else "描き直せませんでした") }
+            } else null,
             "壁紙の状態を調べる" to {
                 android.app.AlertDialog.Builder(me)
                     .setTitle("ロック画面の壁紙")
                     .setMessage(LockArt.describe(me) +
-                        "\n\nロック画面が「FlipHome の刺繍（動く壁紙）」になっていれば、日付は自動で変わります。" +
-                        "やめるときは、Galaxy の「壁紙とスタイル」でほかの壁紙を選んでください。")
+                        "\n\nロック画面がほかのアプリの「動く壁紙」になっていると、FlipHome の絵より手前に出ます。" +
+                        "Galaxy の「壁紙とスタイル」でロック画面に静止画を選び直してから、もう一度「刺繍にする」を押してください。")
                     .setPositiveButton("閉じる", null)
                     .show()
             },
