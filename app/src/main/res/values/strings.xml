@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">FlipHome</string>
+    <string name="lock_wallpaper_name">FlipHome 刺繍のカレンダー</string>
+    <string name="lock_wallpaper_desc">黒い布地に、刺繍の月のカレンダー。日付は自動で変わります。</string>
 </resources>

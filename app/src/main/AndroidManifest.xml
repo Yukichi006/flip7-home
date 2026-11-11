@@ -8,8 +8,6 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <!-- 明るさのフェーダーで、画面の明るさを変える（「システム設定の変更」で許可したときだけ） -->
     <uses-permission android:name="android.permission.WRITE_SETTINGS" tools:ignore="ProtectedPermissions" />
-    <!-- ロック画面の壁紙を刺繍の絵にし、日付が変わるたびに描き直す（設定でオンにしたときだけ。ほかの壁紙は読まない） -->
-    <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <!-- 下へスワイプで通知を開く -->
     <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
 
@@ -17,6 +15,9 @@
          geocoding-api.open-meteo.com）だけで、送るのは選んだ地点の緯度・経度と、地点を探すときの地名だけ。
          暗号化しない通信（http）は network_security_config で禁止している -->
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- ロック画面の刺繍の「動く壁紙」を持っている（なくても動く） -->
+    <uses-feature android:name="android.software.live_wallpaper" android:required="false" />
 
     <queries>
         <!-- ホーム画面とアプリ一覧に、インストール済みのアプリを並べる -->
@@ -79,9 +80,19 @@
             </intent-filter>
         </service>
 
-        <!-- 日付が変わったときに、ロック画面の刺繍の壁紙を今日の分に描き直す（自分のアプリからの予約だけを受ける） -->
-        <receiver
-            android:name=".LockArt$MidnightReceiver"
-            android:exported="false" />
+        <!-- ロック画面の刺繍の「動く壁紙」。壁紙に選んだときだけ動き、ロック画面が出るたびに今日のカレンダーを描く。
+             BIND_WALLPAPER は「システムの壁紙の仕組みだけがつなげる」という守りで、FlipHome が何かの権限を得るわけではない -->
+        <service
+            android:name=".LockWallpaper"
+            android:exported="true"
+            android:label="@string/lock_wallpaper_name"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/lock_wallpaper" />
+        </service>
     </application>
 </manifest>
