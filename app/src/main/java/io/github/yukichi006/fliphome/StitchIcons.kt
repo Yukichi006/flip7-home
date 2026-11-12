@@ -39,7 +39,7 @@ object StitchIcons {
     private const val GRID = 128
 
     /** 作り方を変えたら上げる（古い保存済みの絵を使わないようにする）。 */
-    private const val RECIPE = 3
+    private const val RECIPE = 4
 
     private val memory = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
@@ -432,7 +432,7 @@ object StitchIcons {
 
     /**
      * アイコンの外枠の輪郭か（形を読み取ると、アイコンの土台の角の丸い四角や丸も線になる）。
-     * マス目のほぼ端から端まで広がる、閉じた線を外枠とみなす。
+     * マス目のほぼ端から端まで広がり、中が詰まっている（四角や丸に近い）閉じた線を、外枠とみなす。
      */
     private fun isFrame(l: FloatArray): Boolean {
         if (l.size < 8) return false
@@ -442,7 +442,12 @@ object StitchIcons {
         for (i in l.indices step 2) {
             minX = min(minX, l[i]); maxX = max(maxX, l[i]); minY = min(minY, l[i + 1]); maxY = max(maxY, l[i + 1])
         }
-        return maxX - minX > GRID * 0.82f && maxY - minY > GRID * 0.82f
+        if (maxX - minX <= GRID * 0.82f || maxY - minY <= GRID * 0.82f) return false
+        // 端から端まで広がっていても、中がすかすかの線（PayPay の「P」のように、大きく書いた文字や図柄）は外枠ではない。
+        // 外枠（角の丸い四角や丸）は、囲んだ広さが、縦横の幅で作る四角の 7 割を超える
+        var area = 0f
+        for (i in 0 until l.size - 2 step 2) area += l[i] * l[i + 3] - l[i + 2] * l[i + 1]
+        return abs(area) / 2f > (maxX - minX) * (maxY - minY) * 0.72f
     }
 
     /** 角を少し丸める（チャイキン法を 1 回）。 */
