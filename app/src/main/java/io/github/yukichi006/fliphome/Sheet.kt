@@ -378,7 +378,7 @@ fun taskInput(context: Context, onPin: (String, Boolean) -> Unit): View {
         LinearLayout.LayoutParams(0, context.dpi(54f), 1f))
     column.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dpi(10f) })
     column.addView(TextView(context).apply {
-        text = "名札をタップで済み、横へスワイプで外す、長押しでいちばん上へ。書いたことはスマホの中だけに保存します。"
+        text = "付箋をつまんで引くと、はがれて完了。長押しでいちばん前へ。書いたことはスマホの中だけに保存します。"
         setTextColor(Thread.DIM)
         textSize = 12.5f
         setPadding(context.dpi(8f), context.dpi(12f), context.dpi(8f), 0)
