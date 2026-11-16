@@ -219,7 +219,17 @@ class HomeActivity : Activity() {
 
     /** マス目に、編集モードの操作（空いたマスのタップ・部品のタップ・外す・動かす）をつなぐ。[board] は、その時点の盤を返す。 */
     private fun wireGrid(g: ModuleGrid, board: () -> Board) {
-        g.onEmptyTap = { c, r -> activeBoard = board(); showCellSheet(c, r) }
+        g.onEmptyTap = { c, r ->
+            val b = board()
+            activeBoard = b
+            // 見た目は空いているのに、見えない部品（アンインストールしたアプリのパッドや、はみ出して隠れた部品）が
+            // 残っていると、そこには何も置けなくなる。空いて見えるマスをタップしたら、そのマスの見えない部品は片付ける
+            b.modules().filter { it.covers(c, r) }.forEach { ghost ->
+                ghost[Module.P_WIDGET]?.toIntOrNull()?.let { runCatching { AppWidgets.host(this).deleteAppWidgetId(it) } }
+                b.remove(ghost)
+            }
+            showCellSheet(c, r)
+        }
         g.onModuleTap = { m -> activeBoard = board(); showModuleSheet(m) }
         g.onRemove = { m ->
             board().remove(m)
@@ -891,7 +901,10 @@ class HomeActivity : Activity() {
     /** 空いたマスをタップしたとき：アプリか部品を選んで置く。 */
     private fun showCellSheet(col: Int, row: Int) = openSheet("マスに置く") { s ->
         fun appTab() = s.setBody(AppPicker(this, repo) { app ->
-            board().placeAt(ModuleType.APP, col, row, mapOf(Module.P_APP to app.key))
+            val b = board()
+            val placed = b.placeAt(ModuleType.APP, col, row, mapOf(Module.P_APP to app.key))
+            // 置けなかったときは、黙って閉じずに知らせる（原因を調べられるよう、マスと盤の様子も添える）
+            if (placed == null) toast("ここには置けませんでした（マス ${col + 1},${row + 1}／${if (b.inBook) "パネルの布" else "ページ"}に ${b.modules().size} 個）")
             done()
         })
         fun moduleTab() = s.setBody(modulePicker(this) { type ->
