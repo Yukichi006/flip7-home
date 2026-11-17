@@ -86,6 +86,22 @@ class PanelTouchTest {
         }
     }
 
+    /**
+     * 見た目は空いているのに、見えない部品（アンインストールしたアプリのパッドなど）が残っているマス。
+     * 0.35.1 までは、そこをタップして選んでも、黙って何も置かれなかった。
+     */
+    @Test
+    fun `見えない部品が残っているマスにも、片付けてから置ける`() {
+        val ghost = Module(8, ModuleType.APP, 1, 2, 1, 1, mapOf(Module.P_APP to "もう.ない/.アプリ#0"))
+        val other = Module(9, ModuleType.APP, 2, 3, 1, 1, mapOf(Module.P_APP to "これも.ない/.アプリ#0"))
+        val activity = openEditing(listOf(Page(listOf(ghost, other))))
+        placePouchAt(activity, 1, 2)
+        val inside = book(activity).sheets[0].modules
+        assertTrue("タップしたマスに巾着が置かれる", inside.any { it.type == ModuleType.FOLDER && it.col == 1 && it.row == 2 })
+        assertTrue("タップしたマスの見えない部品は片付く", inside.none { it.id == 8L })
+        assertTrue("ほかのマスの見えない部品は、そのまま残す", inside.any { it.id == 9L })
+    }
+
     @Test
     fun `ページの空いたマスをタップすると、ページのそのマスに置かれる`() {
         val activity = openEditing()

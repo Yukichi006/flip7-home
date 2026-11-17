@@ -41,21 +41,28 @@ jobs:
       # 配る前に、テスト（配置の計算と、画面を指で操作するテスト）を通す。落ちたらビルドもリリースも止まる
       - name: テスト
         run: chmod +x gradlew && ./gradlew testReleaseUnitTest
-      - name: テストの結果（落ちたとき）
-        if: failure()
+      - name: テストの結果
+        if: always()
         run: |
-          # 落ちたテストの名前と理由を、ログに出す
-          for f in app/build/test-results/testReleaseUnitTest/*.xml; do
-            python3 - "$f" <<'PY'
+          # 動いたテストの数と、落ちたテストの名前・理由を、ログとまとめに出す
+          python3 - app/build/test-results/testReleaseUnitTest/*.xml <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
           import sys, xml.etree.ElementTree as ET
-          root = ET.parse(sys.argv[1]).getroot()
-          for case in root.iter("testcase"):
-              for bad in list(case.findall("failure")) + list(case.findall("error")):
-                  print("✗", case.get("classname"), "/", case.get("name"))
-                  print("   ", (bad.get("message") or "").replace("\n", " ")[:600])
-                  print("   ", "\n    ".join((bad.text or "").splitlines()[:25]))
+          total = bad_count = 0
+          for path in sys.argv[1:]:
+              try:
+                  root = ET.parse(path).getroot()
+              except Exception:
+                  continue
+              for case in root.iter("testcase"):
+                  total += 1
+                  bads = list(case.findall("failure")) + list(case.findall("error"))
+                  print("✗" if bads else "✓", case.get("classname", "").split(".")[-1], "/", case.get("name"))
+                  for bad in bads:
+                      bad_count += 1
+                      print("   ", (bad.get("message") or "").replace("\n", " ")[:600])
+                      print("   ", "\n    ".join((bad.text or "").splitlines()[:25]))
+          print(f"テスト {total} 本のうち、落ちたもの {bad_count} 本")
           PY
-          done
       - run: ./gradlew assembleRelease
         env:
           FLIPHOME_KEYSTORE_PASSWORD: ${{ secrets.FLIPHOME_KEYSTORE_PASSWORD }}
