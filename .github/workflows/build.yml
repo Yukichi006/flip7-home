@@ -38,7 +38,25 @@ jobs:
       - name: バージョンを読む
         id: version
         run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
-      - run: chmod +x gradlew && ./gradlew assembleRelease
+      # 配る前に、テスト（配置の計算と、画面を指で操作するテスト）を通す。落ちたらビルドもリリースも止まる
+      - name: テスト
+        run: chmod +x gradlew && ./gradlew testReleaseUnitTest
+      - name: テストの結果（落ちたとき）
+        if: failure()
+        run: |
+          # 落ちたテストの名前と理由を、ログに出す
+          for f in app/build/test-results/testReleaseUnitTest/*.xml; do
+            python3 - "$f" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse(sys.argv[1]).getroot()
+          for case in root.iter("testcase"):
+              for bad in list(case.findall("failure")) + list(case.findall("error")):
+                  print("✗", case.get("classname"), "/", case.get("name"))
+                  print("   ", (bad.get("message") or "").replace("\n", " ")[:600])
+                  print("   ", "\n    ".join((bad.text or "").splitlines()[:25]))
+          PY
+          done
+      - run: ./gradlew assembleRelease
         env:
           FLIPHOME_KEYSTORE_PASSWORD: ${{ secrets.FLIPHOME_KEYSTORE_PASSWORD }}
       - name: APK の SHA-256 を表示

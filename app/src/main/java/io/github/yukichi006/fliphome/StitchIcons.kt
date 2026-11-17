@@ -434,7 +434,7 @@ object StitchIcons {
      * アイコンの外枠の輪郭か（形を読み取ると、アイコンの土台の角の丸い四角や丸も線になる）。
      * マス目のほぼ端から端まで広がり、中が詰まっている（四角や丸に近い）閉じた線を、外枠とみなす。
      */
-    private fun isFrame(l: FloatArray): Boolean {
+    internal fun isFrame(l: FloatArray): Boolean {
         if (l.size < 8) return false
         val closed = abs(l[0] - l[l.size - 2]) < 0.01f && abs(l[1] - l[l.size - 1]) < 0.01f
         if (!closed) return false

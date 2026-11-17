@@ -43,6 +43,14 @@ android {
     kotlinOptions { jvmTarget = "17" }
     // リリース版のビルドで走る簡易チェック（lint）は、問題を記録だけして止めない
     lint { abortOnError = false }
+    // テストで、パソコンの上に Android の画面を組み立てられるようにする（マニフェストとテーマも読ませる）
+    testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
-// 画面はすべてコードで描くので、AndroidX などのライブラリは使わない（Kotlin の標準ライブラリだけ）
+// 画面はすべてコードで描くので、AndroidX などのライブラリは使わない（Kotlin の標準ライブラリだけ）。
+// 下の 2 つはテストのときだけ使う道具で、配る APK には入らない（持ち主の了承済み）：
+// JUnit はテストを動かす土台、Robolectric はパソコンの上で Android の画面を動かす道具
+dependencies {
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+}
