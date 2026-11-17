@@ -904,7 +904,7 @@ class HomeActivity : Activity() {
             val b = board()
             val placed = b.placeAt(ModuleType.APP, col, row, mapOf(Module.P_APP to app.key))
             // 置けなかったときは、黙って閉じずに知らせる（原因を調べられるよう、マスと盤の様子も添える）
-            if (placed == null) toast("ここには置けませんでした（マス ${col + 1},${row + 1}／${if (b.inBook) "パネルの布" else "ページ"}に ${b.modules().size} 個）")
+            if (placed == null) toast("ここには置けませんでした（マス ${col + 1},${row + 1}／${if (b.inBook) "パネルの布" else "ページ"} ${b.cols}×${b.rows} に ${b.modules().size} 個）")
             done()
         })
         fun moduleTab() = s.setBody(modulePicker(this) { type ->
