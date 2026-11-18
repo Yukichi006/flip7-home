@@ -44,4 +44,33 @@ class RingPacketTest {
         assertEquals("包み 種類02 番号26 中身[fc]",
             RingPacket.explain("be940001-7333-be46-b7ae-689e71722bd5", hex("02 26 07 00 fc 5b ee")))
     }
+
+    /** 0.36.2 の診断で、専用アプリを開いたときに届いた「機器の情報」の答え（アプリの表示は版 2.18）。 */
+    private val info = "02 00 1e 00 a3 00 12 02 00 3c 20 01 00 03 e3 01 d4 0a 21 00 09 00 01 00 74 40 20 00 41 7f"
+
+    @Test
+    fun `機器の情報の答えから、残量と版を読む`() {
+        val d = RingPacket.deviceInfo(hex(info))!!
+        assertEquals(60, d.level)
+        assertEquals("2.18", d.version)
+        assertEquals("機器の情報：残量 60%・版 2.18", RingPacket.explain("be940001-7333-be46-b7ae-689e71722bd5", hex(info)))
+    }
+
+    @Test
+    fun `ほかの包みや、壊れた包みからは残量を読まない`() {
+        assertNull(RingPacket.deviceInfo(hex("02 26 07 00 fc 5b ee")))
+        assertNull(RingPacket.deviceInfo(hex("06 00 0c 00 d5 03 5c 02 1e 00 43 fe")))
+        // CRC を 1 つ変えたもの
+        assertNull(RingPacket.deviceInfo(hex(info.dropLast(2) + "7e")))
+    }
+
+    @Test
+    fun `少し前に読んだ残量には、いつ読んだかを添える`() {
+        val now = 10L * 24 * 60 * 60_000
+        assertNull(WidgetBattery.ageText(now - 5 * 60_000, now))
+        assertEquals("40分前", WidgetBattery.ageText(now - 40 * 60_000, now))
+        assertEquals("3時間前", WidgetBattery.ageText(now - 3 * 60 * 60_000 - 59_000, now))
+        assertEquals("2日前", WidgetBattery.ageText(now - 2 * 24 * 60 * 60_000L, now))
+        assertNull(WidgetBattery.ageText(null, now))
+    }
 }

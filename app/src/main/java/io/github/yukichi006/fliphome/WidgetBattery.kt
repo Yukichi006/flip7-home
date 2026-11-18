@@ -161,4 +161,14 @@ object WidgetBattery {
         val y = b.lowercase().replace(" ", "")
         return x.isNotEmpty() && y.isNotEmpty() && (x in y || y in x)
     }
+
+    /** 読んだ時刻 [at] が 30 分より前なら、「40分前」「3時間前」「2日前」。 */
+    fun ageText(at: Long?, now: Long = System.currentTimeMillis()): String? {
+        val min = ((now - (at ?: return null)) / 60_000L).takeIf { it >= 30 } ?: return null
+        return when {
+            min < 60 -> "${min}分前"
+            min < 24 * 60 -> "${min / 60}時間前"
+            else -> "${min / (24 * 60)}日前"
+        }
+    }
 }

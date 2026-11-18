@@ -26,7 +26,7 @@ class InspectionTest {
     fun `専用アプリへ切り替えてホーム画面に戻っても、診断は続き、記録が残る`() {
         shadowOf(T.app as android.app.Application).grantPermissions(Manifest.permission.BLUETOOTH_CONNECT)
         val controller = Robolectric.buildActivity(HomeActivity::class.java).setup()
-        val ring = T.app.getSystemService(BluetoothManager::class.java).adapter.getRemoteDevice("74:02:CB:40:C8:E7")
+        val ring = T.app.getSystemService(BluetoothManager::class.java)!!.adapter.getRemoteDevice("74:02:CB:40:C8:E7")
         Inspection.start(controller.get(), ring)
         T.idle()
         assertTrue("診断が始まっていない", Inspection.running)

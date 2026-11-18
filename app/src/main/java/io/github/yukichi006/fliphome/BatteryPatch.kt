@@ -34,7 +34,8 @@ import android.text.TextUtils
  */
 @SuppressLint("ViewConstructor")
 class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : PatchView(context) {
-    private class Row(val name: String, val level: Int, val charging: Boolean)
+    /** 1 行。[age] は、少し前に読んだ残量なら「2時間前」など。 */
+    private class Row(val name: String, val level: Int, val charging: Boolean, val age: String? = null)
 
     private var rows = emptyList<Row>()
     private var phoneLevel = -1
@@ -187,7 +188,7 @@ class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : Pa
             } else null
             level ?: return@mapNotNull null
             val n = runCatching { d.alias ?: d.name }.getOrNull() ?: d.address
-            Row(n, level, false)
+            Row(n, level, false, if (reported == null) WidgetBattery.ageText(BleBattery.readAt(d)) else null)
         }.sortedBy { it.name }
     }
 
@@ -265,6 +266,7 @@ class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : Pa
             // 名前（低いとき・充電中はひとこと添える）
             val note = when {
                 row.charging -> "充電中"
+                row.age != null -> if (row.level <= LOW) "残りわずか・${row.age}" else row.age
                 row.level <= LOW -> "残りわずか"
                 else -> null
             }
