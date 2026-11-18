@@ -54,6 +54,9 @@ class BleInspector(
 
     private fun elapsed() = "%5.1f秒".format((SystemClock.elapsedRealtime() - startedAt) / 1000f)
 
+    /** まだ調べている途中か。 */
+    val running: Boolean get() = !finished
+
     fun start() {
         startedAt = SystemClock.elapsedRealtime()
         say("■ ${runCatching { device.alias ?: device.name }.getOrNull() ?: "名前なし"}（${device.address}）につないでいます…")
@@ -121,7 +124,7 @@ class BleInspector(
             say(lines.toString())
             say("${elapsed()} 読める値を読み、通知を受け取る準備をします…")
             queue += { _ ->
-                say("${elapsed()} 準備ができました。${LISTEN_MS / 1000} 秒のあいだ通知を待ちます。いま専用アプリを開くと、残量の答えが届くことがあります")
+                say("${elapsed()} 準備ができました。${LISTEN_MS / 1000} 秒のあいだ通知を待ちます。いま専用アプリを開くと、残量の答えが届くことがあります（FlipHome に戻ったら、電池の部品の設定の「調べた記録を見る」で続きを見られます）")
                 false
             }
             next()
@@ -214,5 +217,34 @@ class BleInspector(
             val readable = text.all { it.code in 0x20..0x7e || it.code > 0xa0 } && text.isNotBlank()
             return if (readable) "$hex 「$text」" else hex
         }
+    }
+}
+
+/**
+ * 動いている診断と、その記録。設定のパネルとは別に持っておく。
+ * 専用アプリへ切り替えると FlipHome のパネルは閉じるが、診断は続け、戻ってきたら「調べた記録を見る」で続きを見られる。
+ */
+object Inspection {
+    private var current: BleInspector? = null
+
+    /** 記録の行（最後に調べたもの）。 */
+    val lines = mutableListOf<String>()
+
+    /** 記録に行が足されたときに呼ぶ（記録を表示しているパネルが、書き足すため）。 */
+    var onLine: ((String) -> Unit)? = null
+
+    val running: Boolean get() = current?.running == true
+
+    fun start(context: Context, device: BluetoothDevice) {
+        current?.stop()
+        lines.clear()
+        current = BleInspector(context, device) { line ->
+            lines += line
+            onLine?.invoke(line)
+        }.also { it.start() }
+    }
+
+    fun stop() {
+        current?.stop()
     }
 }

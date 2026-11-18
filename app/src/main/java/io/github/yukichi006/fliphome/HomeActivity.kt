@@ -52,9 +52,6 @@ class HomeActivity : Activity() {
     /** 電池の部品が残量を読むために選んでいるウィジェット（置くのではなく、その部品に覚えさせる）。 */
     private var pendingBattery: Module? = null
 
-    /** 動いている Bluetooth 機器の診断（パネルを閉じたら止める）。 */
-    private var inspector: BleInspector? = null
-
     /** めくれるパネルごとに、何枚目の布を出しているか（パネルの部品の番号 → 布の番号）。 */
     private val bookPages = mutableMapOf<Long, Int>()
 
@@ -568,6 +565,9 @@ class HomeActivity : Activity() {
                 patch?.refresh()
                 s.setBody(textBody(patch?.diagnosis() ?: "電池の部品が見つかりませんでした"))
             },
+        ) + listOfNotNull(Inspection.lines.takeIf { it.isNotEmpty() }?.let {
+            (if (Inspection.running) "調べた記録を見る（いま調べています）" else "調べた記録を見る（終わりました）") to { showInspection(s) }
+        }) + listOf(
             "Bluetooth 機器を調べる（リングなど）\n残量の読み方を探すための診断" to { pickInspectDevice(s) },
         ) + listOfNotNull(frameItem(m)) + pageMoveItems(m) + listOf("外す" to {
             widgetId?.let { runCatching { AppWidgets.host(this).deleteAppWidgetId(it) } }
@@ -625,20 +625,27 @@ class HomeActivity : Activity() {
             val name = runCatching { d.alias ?: d.name }.getOrNull() ?: "名前なし"
             val state = if (d in le) "つながっている" else "登録済み"
             "$name\n${d.address}（$state）" to {
-                val (body, append) = logBody()
-                s.setBody(body)
-                inspector?.stop()
-                inspector = BleInspector(this, d, append).also { it.start() }
+                Inspection.start(this, d)
+                showInspection(s)
             }
         }, note = "選んだ機器につないで、3 分ほど中身を調べます（機器へ命令は送りません）。調べているあいだに機器の専用アプリを開き、" +
-            "残量の出る画面を表示すると、残量の答えも見えることがあります。終わったら「コピー」を押して、アプリに出ていた残量と一緒に送ってください。"))
+            "残量の出る画面を表示すると、残量の答えも見えることがあります。FlipHome に戻ったら、電池の部品の設定の" +
+            "「調べた記録を見る」で続きを見られます。終わったら「コピー」を押して、アプリに出ていた残量と一緒に送ってください。"))
+    }
+
+    /** 診断の記録を表示する。調べている途中なら、届いた行を書き足していく。 */
+    private fun showInspection(s: Sheet) {
+        val (body, append) = logBody(extra = if (Inspection.running) listOf("止める" to { Inspection.stop() }) else emptyList())
+        Inspection.lines.forEach(append)
+        Inspection.onLine = append
+        s.setBody(body)
     }
 
     /** 文字を並べて見せ、コピーできるようにする中身。 */
     private fun textBody(text: String): View = logBody(follow = false).also { it.second(text) }.first
 
     /** 少しずつ書き足していく記録の中身と、書き足す関数。 */
-    private fun logBody(follow: Boolean = true): Pair<View, (String) -> Unit> {
+    private fun logBody(follow: Boolean = true, extra: List<Pair<String, () -> Unit>> = emptyList()): Pair<View, (String) -> Unit> {
         val log = TextView(this).apply {
             setTextColor(Thread.COLOR)
             textSize = 11.5f
@@ -656,7 +663,13 @@ class HomeActivity : Activity() {
         }
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(copy, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(50f)))
+            // 「コピー」と、ほかのボタン（「止める」など）を横に並べる
+            addView(LinearLayout(this@HomeActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                addView(copy, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+                for ((label, action) in extra) addView(Pill(this@HomeActivity, label).apply { setOnClickListener { action() } },
+                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(50f)))
             addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         val append: (String) -> Unit = { line ->
@@ -1018,12 +1031,7 @@ class HomeActivity : Activity() {
 
     private fun openSheet(title: String, build: (Sheet) -> Unit) {
         sheet?.dismiss()
-        inspector?.stop()
-        inspector = null
-        val s = Sheet(this, insetBottom) {
-            if (sheet != null && sheet?.parent == null) sheet = null
-            if (sheet == null) { inspector?.stop(); inspector = null }
-        }
+        val s = Sheet(this, insetBottom) { if (sheet != null && sheet?.parent == null) sheet = null }
         s.setTitle(title)
         build(s)
         sheet = s
