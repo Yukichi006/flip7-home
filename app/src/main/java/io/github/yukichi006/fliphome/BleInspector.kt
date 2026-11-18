@@ -37,6 +37,11 @@ class BleInspector(
     private var finished = false
     private var notifications = 0
 
+    /** 値ごとの、最後に届いた通知と、同じ値がくり返し届いた回数。 */
+    private val last = mutableMapOf<String, ByteArray>()
+    private val repeats = mutableMapOf<String, Int>()
+    private var shown = 0
+
     /** 順番に行う問い合わせ（Bluetooth LE は一度に 1 つしか問い合わせられない）。 */
     private val queue = ArrayDeque<(BluetoothGatt) -> Boolean>()
 
@@ -78,7 +83,8 @@ class BleInspector(
         if (finished) return
         finished = true
         main.removeCallbacks(timeout)
-        log("$reason（通知は $notifications 回届きました）")
+        val same = repeats.entries.joinToString("、") { "${it.key} ×${it.value}" }
+        log("$reason（通知は $notifications 回届きました${if (same.isEmpty()) "" else "。前と同じ値で省いたもの：$same"}）")
         runCatching { gatt?.disconnect(); gatt?.close() }
     }
 
@@ -122,7 +128,9 @@ class BleInspector(
         }
 
         override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-            say("${elapsed()} 読む ${short(c.uuid)}: ${if (status == BluetoothGatt.GATT_SUCCESS) describe(value) else "失敗（status=$status）"}")
+            val key = short(c.uuid)
+            val text = if (status == BluetoothGatt.GATT_SUCCESS) describe(value) + (RingPacket.explain(key, value)?.let { " → $it" } ?: "") else "失敗（status=$status）"
+            say("${elapsed()} 読む $key: $text")
             next()
         }
 
@@ -152,16 +160,25 @@ class BleInspector(
 
         override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
             notifications++
-            if (notifications <= MAX_NOTIFICATIONS) say("${elapsed()} 通知 ${short(c.uuid)}: ${describe(value)}")
-            else if (notifications == MAX_NOTIFICATIONS + 1) say("（通知が多いので、ここから先は数えるだけにします）")
+            // 心拍や歩数のように、同じ値を 1 秒ごとに送ってくるものがあるので、前と同じ値は数えるだけにする
+            // （残量の答えのような、たまにしか来ない知らせが埋もれないように）
+            val key = short(c.uuid)
+            if (last[key]?.contentEquals(value) == true) {
+                repeats[key] = (repeats[key] ?: 0) + 1
+                return
+            }
+            last[key] = value.copyOf()
+            shown++
+            if (shown <= MAX_NOTIFICATIONS) say("${elapsed()} 通知 $key: ${describe(value)}${RingPacket.explain(key, value)?.let { " → $it" } ?: ""}")
+            else if (shown == MAX_NOTIFICATIONS + 1) say("（変わった通知が多いので、ここから先は数えるだけにします）")
         }
     }
 
     companion object {
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
         private const val CONNECT_MS = 20_000L
-        const val LISTEN_MS = 90_000L
-        private const val MAX_NOTIFICATIONS = 150
+        const val LISTEN_MS = 180_000L
+        private const val MAX_NOTIFICATIONS = 300
 
         private fun BluetoothGattCharacteristic.isReadable() = properties and BluetoothGattCharacteristic.PROPERTY_READ != 0
         private fun BluetoothGattCharacteristic.isNotifiable() =
