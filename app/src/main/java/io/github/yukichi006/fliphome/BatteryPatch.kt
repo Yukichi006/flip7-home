@@ -10,10 +10,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.appwidget.AppWidgetHostView
+import android.appwidget.AppWidgetManager
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.BatteryManager
+import android.os.Bundle
+import android.util.SizeF
 import android.text.TextUtils
 
 /**
@@ -23,15 +27,25 @@ import android.text.TextUtils
  * 残量の読み方は FlipCover と同じ：機器が Android に報告している値を使い、
  * 報告しない Bluetooth LE 機器（Galaxy Fit など）は [BleBattery] で直接問い合わせる。
  * 読むには「付近のデバイス」の許可が要る。許可がなければ本体だけを表示し、タップで許可を求める。
+ *
+ * Galaxy Fit3 などは、残量を Samsung のアプリにしか送らず、上のどちらでも読めない。
+ * [sourceWidget]（Galaxy の「バッテリー」ウィジェットの番号）があれば、そのウィジェットを見えないまま動かし、
+ * 表示されている残量を [WidgetBattery] で読み取って足す。
  */
 @SuppressLint("ViewConstructor")
-class BatteryPatch(context: Context) : PatchView(context) {
+class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : PatchView(context) {
     private class Row(val name: String, val level: Int, val charging: Boolean)
 
     private var rows = emptyList<Row>()
     private var phoneLevel = -1
     private var phoneCharging = false
     private val btLevels = mutableMapOf<String, Int>()
+
+    /** 残量を読み取るために、見えないまま動かしている Galaxy の「バッテリー」ウィジェット。 */
+    private var source: AppWidgetHostView? = null
+
+    /** ウィジェットから最後に読み取った行（診断用）。 */
+    private var widgetEntries = emptyList<WidgetBattery.Entry>()
 
     private val title = context.threadText(10.5f, color = Thread.DIM).apply { letterSpacing = 0.2f }
     private val name = context.threadText(11.5f)
@@ -96,13 +110,43 @@ class BatteryPatch(context: Context) : PatchView(context) {
         context.registerReceiver(receiver, filter, Manifest.permission.BLUETOOTH_CONNECT, null, Context.RECEIVER_EXPORTED)
             ?.let { readPhone(it) }
         BleBattery.addListener(onBleLevel)
+        attachSource()
         post(poll)
+    }
+
+    /** 残量を読むためのウィジェットを、画面には出さずに用意する。 */
+    private fun attachSource() {
+        val id = sourceWidget ?: return
+        val info = AppWidgetManager.getInstance(context).getAppWidgetInfo(id) ?: return
+        source = runCatching { AppWidgets.host(context).createView(context, id, info) }.getOrNull()
+        sizeSource()
+    }
+
+    /**
+     * 見えないウィジェットに大きさを伝え、その大きさで並べさせる。小さいと機器を減らして出すウィジェットがあるので、
+     * 少なくとも 2×2 ほどの大きさにする。
+     */
+    private fun sizeSource() {
+        val v = source ?: return
+        val d = resources.displayMetrics.density
+        val w = maxOf(width, (SOURCE_DP * d).toInt())
+        val h = maxOf(height, (SOURCE_DP * d).toInt())
+        runCatching { v.updateAppWidgetSize(Bundle(), listOf(SizeF(w / d, h / d))) }
+        v.measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY))
+        v.layout(0, 0, w, h)
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        sizeSource()
+        refresh()
     }
 
     override fun onDetachedFromWindow() {
         runCatching { context.unregisterReceiver(receiver) }
         removeCallbacks(poll)
         BleBattery.removeListener(onBleLevel)
+        source = null
         super.onDetachedFromWindow()
     }
 
@@ -119,7 +163,9 @@ class BatteryPatch(context: Context) : PatchView(context) {
     fun refresh() {
         val list = mutableListOf<Row>()
         if (phoneLevel >= 0) list += Row("本体", phoneLevel, phoneCharging)
-        list += bluetoothRows()
+        val bt = bluetoothRows()
+        list += bt
+        list += widgetRows(bt)
         rows = list.take(MAX_ROWS)
         invalidate()
     }
@@ -143,6 +189,54 @@ class BatteryPatch(context: Context) : PatchView(context) {
             val n = runCatching { d.alias ?: d.name }.getOrNull() ?: d.address
             Row(n, level, false)
         }.sortedBy { it.name }
+    }
+
+    /**
+     * 見えないウィジェットから読み取った残量のうち、まだ出していない機器の行。
+     * 本体の行と、すでに Android から読めている機器（Buds など）は重ねて出さない。
+     */
+    private fun widgetRows(shown: List<Row>): List<Row> {
+        val v = source ?: return emptyList()
+        widgetEntries = runCatching { WidgetBattery.read(v) }.getOrDefault(emptyList())
+        return WidgetBattery.merge(widgetEntries, shown.map { it.name to it.level }, unnamedCandidates(), android.os.Build.MODEL).map { Row(it.first, it.second, it.third) }
+    }
+
+    /** 名前の書かれていない行に当てる名前の候補：つながっているのに、残量を読めていない機器。 */
+    @SuppressLint("MissingPermission")
+    private fun unnamedCandidates(): List<String> {
+        if (!canReadBluetooth()) return emptyList()
+        val manager = context.getSystemService(BluetoothManager::class.java) ?: return emptyList()
+        val bonded = runCatching { manager.adapter?.bondedDevices }.getOrNull().orEmpty()
+        return bonded.filter { isConnected(it) && readBtLevel(it) !in 0..100 && btLevels[it.address] == null && BleBattery.level(it) == null }
+            .mapNotNull { runCatching { it.alias ?: it.name }.getOrNull() }
+            .sorted()
+    }
+
+    /** 診断用の説明：見えないウィジェットの中身と、読み取った結果、Bluetooth で直接問い合わせた様子。 */
+    @SuppressLint("MissingPermission")
+    fun diagnosis(): String = buildString {
+        append("■ Galaxy の「バッテリー」から読んだ行\n")
+        val v = source
+        if (v == null) append(if (sourceWidget == null) "（使っていません）\n" else "（ウィジェットを用意できませんでした）\n")
+        else {
+            if (widgetEntries.isEmpty()) append("（読み取れた行はありません）\n")
+            widgetEntries.forEachIndexed { i, e -> append("${i + 1}. ${e.name ?: "名前なし"}：${e.level}%${if (e.charging) "（充電中）" else ""}\n") }
+        }
+        append("\n■ Bluetooth で直接問い合わせた様子\n")
+        val manager = context.getSystemService(BluetoothManager::class.java)
+        if (!canReadBluetooth() || manager == null) append("（「付近のデバイス」の許可がありません）\n")
+        else {
+            val bonded = runCatching { manager.adapter?.bondedDevices }.getOrNull().orEmpty()
+            val le = runCatching { manager.getConnectedDevices(BluetoothProfile.GATT) }.getOrNull().orEmpty()
+            for (d in (bonded + le).distinctBy { it.address }) {
+                val n = runCatching { d.alias ?: d.name }.getOrNull() ?: d.address
+                val connected = d in le || isConnected(d)
+                if (!connected) continue
+                val reported = readBtLevel(d).takeIf { it in 0..100 }
+                append("・$n：${reported?.let { "Android から $it%" } ?: BleBattery.status(d) ?: "まだ問い合わせていません"}\n")
+            }
+        }
+        if (v != null) append("\n■ ウィジェットの中身\n").append(WidgetBattery.dump(v))
     }
 
     override fun drawContent(canvas: Canvas, area: RectF) {
@@ -208,7 +302,9 @@ class BatteryPatch(context: Context) : PatchView(context) {
 
     companion object {
         const val REQUEST = 12
-        private const val MAX_ROWS = 3
+        private const val MAX_ROWS = 4
+        /** 見えないウィジェットに伝える、少なくともの大きさ（dp）。 */
+        private const val SOURCE_DP = 180f
         /** これ以下なら「残りわずか」と添える（%）。 */
         private const val LOW = 20
         private const val POLL_MS = 60_000L

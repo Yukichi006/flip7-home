@@ -49,6 +49,12 @@ class HomeActivity : Activity() {
     private var pendingWidget: Int = -1
     private var pendingCell: Pair<Int, Int>? = null
 
+    /** 電池の部品が残量を読むために選んでいるウィジェット（置くのではなく、その部品に覚えさせる）。 */
+    private var pendingBattery: Module? = null
+
+    /** 動いている Bluetooth 機器の診断（パネルを閉じたら止める）。 */
+    private var inspector: BleInspector? = null
+
     /** めくれるパネルごとに、何枚目の布を出しているか（パネルの部品の番号 → 布の番号）。 */
     private val bookPages = mutableMapOf<Long, Int>()
 
@@ -367,7 +373,7 @@ class HomeActivity : Activity() {
             ModuleType.TASKS -> pinBoardView(m)
             ModuleType.EVENTS -> MonthEventsView(this)
             ModuleType.AGENDA -> AgendaView(this)
-            ModuleType.BATTERY -> BatteryPatch(this)
+            ModuleType.BATTERY -> BatteryPatch(this, m[Module.P_WIDGET]?.toIntOrNull())
             // アンインストールされたアプリ（や一時的に使えない仕事用のアプリ）は表示しないだけで、配置は残す
             ModuleType.APP -> m[Module.P_APP]?.let { repo.find(it) }?.let { app ->
                 PadView(this, app, repo, second = m[Module.P_LONG_APP]?.let { repo.find(it) }, peel = peelFrom, labelMode = padLabelFor(m)) { enterEdit() }
@@ -512,6 +518,14 @@ class HomeActivity : Activity() {
     /** 選んだウィジェットを、覚えておいたマスに置く（入らなければ、入るところまで小さくする）。 */
     private fun finishWidget() {
         val id = pendingWidget
+        pendingBattery?.let { m ->
+            pendingBattery = null
+            pendingWidget = -1
+            board().replace(m.with(Module.P_WIDGET, id.toString()))
+            toast("Galaxy の「バッテリー」から残量を読みます")
+            rebuildHome()
+            return
+        }
         val (col, row) = pendingCell ?: (0 to 0)
         pendingWidget = -1
         pendingCell = null
@@ -527,6 +541,129 @@ class HomeActivity : Activity() {
         if (pendingWidget != -1) runCatching { AppWidgets.host(this).deleteAppWidgetId(pendingWidget) }
         pendingWidget = -1
         pendingCell = null
+        pendingBattery = null
+    }
+
+    // ------------------------------------------------------------------
+    // 電池の部品
+    // ------------------------------------------------------------------
+
+    /** 電池の部品の設定：Galaxy の「バッテリー」から読む・読み取りの様子・Bluetooth 機器の診断。 */
+    private fun batterySheet(m: Module) = openSheet(m.type.label) { s ->
+        s.setTabs(emptyList(), 0) {}
+        val widgetId = m[Module.P_WIDGET]?.toIntOrNull()
+        val source: List<Pair<String, () -> Unit>> = if (widgetId == null) listOf(
+            "Galaxy の「バッテリー」から読む\nGalaxy Fit など、ここに出ない機器の残量を足す" to { pickBatterySource(m) },
+        ) else listOf(
+            "Galaxy の「バッテリー」から読むのをやめる" to {
+                runCatching { AppWidgets.host(this).deleteAppWidgetId(widgetId) }
+                board().replace(m.with(Module.P_WIDGET, null))
+                done()
+            },
+        )
+        val items = source + listOf(
+            "読み取りの様子を見る（診断）" to {
+                val patch = (0 until grid.childCount).map { grid.getChildAt(it) }
+                    .firstOrNull { (it.layoutParams as? ModuleGrid.Params)?.module?.id == m.id } as? BatteryPatch
+                patch?.refresh()
+                s.setBody(textBody(patch?.diagnosis() ?: "電池の部品が見つかりませんでした"))
+            },
+            "Bluetooth 機器を調べる（リングなど）\n残量の読み方を探すための診断" to { pickInspectDevice(s) },
+        ) + listOfNotNull(frameItem(m)) + pageMoveItems(m) + listOf("外す" to {
+            widgetId?.let { runCatching { AppWidgets.host(this).deleteAppWidgetId(it) } }
+            board().remove(m)
+            done()
+        })
+        s.setBody(actionList(this, items, note = "大きさは右下のつまみ、場所はドラッグで変えられます。"))
+    }
+
+    /** 電池の部品が残量を読むウィジェット（Galaxy の「バッテリー」）を選び、FlipHome に使うことを許してもらう。 */
+    private fun pickBatterySource(m: Module) {
+        val am = android.appwidget.AppWidgetManager.getInstance(this)
+        val pm = packageManager
+        val all = am.installedProviders.map { info ->
+            val app = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(info.provider.packageName, 0)) }.getOrDefault(info.provider.packageName)
+            info to "$app：${info.loadLabel(pm)}"
+        }.sortedBy { it.second.lowercase() }
+        val battery = all.filter { (_, label) -> listOf("バッテリー", "電池", "Battery", "battery").any { it in label } }
+        fun bind(info: android.appwidget.AppWidgetProviderInfo) {
+            val id = AppWidgets.host(this).allocateAppWidgetId()
+            pendingWidget = id
+            pendingCell = null
+            pendingBattery = m
+            closeSheet()
+            if (am.bindAppWidgetIdIfAllowed(id, info.provider)) configureWidget()
+            else {
+                @Suppress("DEPRECATION")
+                runCatching {
+                    startActivityForResult(Intent(android.appwidget.AppWidgetManager.ACTION_APPWIDGET_BIND)
+                        .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                        .putExtra(android.appwidget.AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider), REQUEST_BIND_WIDGET)
+                }.onFailure { cancelWidget() }
+            }
+        }
+        val shown = battery.ifEmpty { all }
+        if (shown.isEmpty()) return toast("ウィジェットが見つかりませんでした")
+        sheet?.setBody(actionList(this, shown.map { (info, label) -> label to { bind(info) } },
+            note = if (battery.isEmpty()) "電池のウィジェットが見つからなかったので、すべてのウィジェットを並べています。"
+            else "選んだウィジェットは画面には出さず、中に表示されている残量だけを読みます。"))
+    }
+
+    /** 診断する Bluetooth 機器を選ぶ。 */
+    @SuppressLint("MissingPermission")
+    private fun pickInspectDevice(s: Sheet) {
+        if (checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.BLUETOOTH_CONNECT), BatteryPatch.REQUEST)
+            return toast("「付近のデバイス」を許可してから、もう一度押してください")
+        }
+        val manager = getSystemService(android.bluetooth.BluetoothManager::class.java)
+        val bonded = runCatching { manager?.adapter?.bondedDevices }.getOrNull().orEmpty()
+        val le = runCatching { manager?.getConnectedDevices(android.bluetooth.BluetoothProfile.GATT) }.getOrNull().orEmpty()
+        val devices = (le + bonded).distinctBy { it.address }
+        if (devices.isEmpty()) return toast("Bluetooth 機器が見つかりませんでした")
+        s.setBody(actionList(this, devices.map { d ->
+            val name = runCatching { d.alias ?: d.name }.getOrNull() ?: "名前なし"
+            val state = if (d in le) "つながっている" else "登録済み"
+            "$name\n${d.address}（$state）" to {
+                val (body, append) = logBody()
+                s.setBody(body)
+                inspector?.stop()
+                inspector = BleInspector(this, d, append).also { it.start() }
+            }
+        }, note = "選んだ機器につないで、中身を調べます（機器へ命令は送りません）。調べているあいだに機器の専用アプリを開くと、" +
+            "残量の答えも見えることがあります。終わったら「コピー」を押して、内容を送ってください。"))
+    }
+
+    /** 文字を並べて見せ、コピーできるようにする中身。 */
+    private fun textBody(text: String): View = logBody(follow = false).also { it.second(text) }.first
+
+    /** 少しずつ書き足していく記録の中身と、書き足す関数。 */
+    private fun logBody(follow: Boolean = true): Pair<View, (String) -> Unit> {
+        val log = TextView(this).apply {
+            setTextColor(Thread.COLOR)
+            textSize = 11.5f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setPadding(dpi(8f), dpi(8f), dpi(8f), dpi(24f))
+        }
+        val scroll = android.widget.ScrollView(this).apply { addView(log) }
+        val copy = Pill(this, "コピー").apply {
+            setOnClickListener {
+                getSystemService(android.content.ClipboardManager::class.java)
+                    ?.setPrimaryClip(android.content.ClipData.newPlainText("FlipHome の診断", log.text))
+                toast("コピーしました")
+            }
+        }
+        val column = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(copy, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dpi(50f)))
+            addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        val append: (String) -> Unit = { line ->
+            log.append(if (log.text.isEmpty()) line else "\n$line")
+            if (follow) scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
+        }
+        return column to append
     }
 
     /** 部品 [m] が置いてある盤（今のページのマス目）。 */
@@ -881,7 +1018,12 @@ class HomeActivity : Activity() {
 
     private fun openSheet(title: String, build: (Sheet) -> Unit) {
         sheet?.dismiss()
-        val s = Sheet(this, insetBottom) { if (sheet != null && sheet?.parent == null) sheet = null }
+        inspector?.stop()
+        inspector = null
+        val s = Sheet(this, insetBottom) {
+            if (sheet != null && sheet?.parent == null) sheet = null
+            if (sheet == null) { inspector?.stop(); inspector = null }
+        }
         s.setTitle(title)
         build(s)
         sheet = s
@@ -936,6 +1078,7 @@ class HomeActivity : Activity() {
             ModuleType.APP -> padSheet(m)
             ModuleType.FOLDER -> folderSheet(m)
             ModuleType.BOOK -> bookSheet(m)
+            ModuleType.BATTERY -> batterySheet(m)
             ModuleType.TIME, ModuleType.DATE, ModuleType.TITLE, ModuleType.CALENDAR, ModuleType.SLIDER, ModuleType.MEDIA, ModuleType.WEATHER -> instrumentSheet(m)
             else -> openSheet(m.type.label) { s ->
                 s.setTabs(emptyList(), 0) {}
