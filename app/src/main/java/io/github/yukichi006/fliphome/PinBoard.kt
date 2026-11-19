@@ -17,20 +17,68 @@ import android.view.animation.AccelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
 
-/** 縫い付けメモの 1 枚（文字。[done] は、はがすと完了にする前の作りで使っていた印で、いまは使わない）。 */
-data class PinTask(val text: String, val done: Boolean = false) {
+/**
+ * 縫い付けメモの 1 枚。
+ * - [genre]：ジャンル（[PinGenre.ALL] の番号）。付箋の布の色がジャンルで決まる
+ * - [due]：納期（1970-01-01 からの日数。なければ null）。納期の近い順に上から並ぶ
+ * - [done]：はがすと完了にする前の作りで使っていた印で、いまは使わない
+ */
+data class PinTask(val text: String, val done: Boolean = false, val genre: Int = 0, val due: Long? = null) {
+    val dueDate: LocalDate? get() = due?.let { LocalDate.ofEpochDay(it) }
+
     companion object {
         fun parse(s: String?): List<PinTask> = runCatching {
             val a = JSONArray(s ?: return emptyList())
-            (0 until a.length()).map { a.getJSONObject(it).let { o -> PinTask(o.getString("t"), o.optBoolean("d")) } }
+            (0 until a.length()).map {
+                a.getJSONObject(it).let { o ->
+                    PinTask(o.getString("t"), o.optBoolean("d"), o.optInt("g", 0).takeIf { g -> g in PinGenre.ALL.indices } ?: 0,
+                        if (o.has("u")) o.getLong("u") else null)
+                }
+            }
         }.getOrDefault(emptyList())
 
-        fun toJson(list: List<PinTask>): String =
-            JSONArray(list.map { JSONObject().put("t", it.text).put("d", it.done) }).toString()
+        fun toJson(list: List<PinTask>): String = JSONArray(list.map { t ->
+            JSONObject().put("t", t.text).put("d", t.done).put("g", t.genre).apply { t.due?.let { put("u", it) } }
+        }).toString()
+
+        /** 納期の近い順に並べる。納期のないものは後ろ。同じ納期どうしは、今の順のまま（新しく書いたものが前）。 */
+        fun sorted(list: List<PinTask>): List<PinTask> = list.sortedWith(compareBy(nullsLast()) { it.due })
+
+        /**
+         * 付箋の下に添える納期の文字と、急ぐかどうか（今日まで・過ぎたものは、オレンジの札にする）。
+         * 例：「今日まで」「明日まで」「あと3日」「11/30」「2日過ぎ」。
+         */
+        fun dueLabel(due: LocalDate, today: LocalDate): Pair<String, Boolean> {
+            val days = ChronoUnit.DAYS.between(today, due)
+            return when {
+                days < 0 -> "${-days}日過ぎ" to true
+                days == 0L -> "今日まで" to true
+                days == 1L -> "明日まで" to false
+                days < 7 -> "あと${days}日" to false
+                else -> "${due.monthValue}/${due.dayOfMonth}" to false
+            }
+        }
+    }
+}
+
+/** 付箋のジャンル（名前と布の色）。番号で保存するので、並びを変えるときは後ろに足す。 */
+data class PinGenre(val name: String, val color: Int) {
+    companion object {
+        val ALL = listOf(
+            PinGenre("なし", 0xFFE9E4D8.toInt()),     // 生成り
+            PinGenre("仕事", 0xFFCFDDE0.toInt()),     // 淡い水色
+            PinGenre("家のこと", 0xFFEFE2A8.toInt()), // 淡い黄
+            PinGenre("買い物", 0xFFEBCFC0.toInt()),   // 淡い桃
+            PinGenre("趣味", 0xFFD5E0C4.toInt()),     // 淡い若草
+        )
+
+        fun of(i: Int) = ALL.getOrElse(i) { ALL[0] }
     }
 }
 
@@ -39,7 +87,8 @@ data class PinTask(val text: String, val done: Boolean = false) {
  * - 空いたところをタップ → [onAdd]（書く欄を開く）。書いた付箋は、まち針で「ぷすっ」と留まる
  * - 付箋をつまんで引く → 角からめくれて、指についてくる。引ききって離すと、はがれて落ちる（＝完了。付箋はなくなる）。
  *   途中で離すと、元の場所に戻る
- * - 付箋を長押し → いちばん前へ留め直す
+ * - 付箋を長押し → [onEdit]（書き直す欄を開く。文字・ジャンル・納期を変えられる）
+ * 付箋の布の色はジャンルで決まり、納期の近い順に上から並ぶ（納期のないものは後ろ）。
  * 残っている付箋の数を、右上にオレンジのタグで出す。中身は [onChange] で保存してもらう（端末の中だけ）。
  */
 @SuppressLint("ViewConstructor")
@@ -48,19 +97,25 @@ class PinBoardView(
     initial: List<PinTask>,
     private val onChange: (List<PinTask>) -> Unit,
     private val onAdd: () -> Unit,
+    private val onEdit: (PinTask) -> Unit,
 ) : PatchView(context, PatchPainter.Shape.Round(20f)) {
-    private var tasks = initial
+    private var tasks = PinTask.sorted(initial)
 
     private val title = context.threadText(10.5f, bold = true, color = Thread.DIM).apply { letterSpacing = 0.12f }
     private val hint = context.threadText(12f, color = Thread.DIM)
     private val more = context.threadText(13f, bold = true, color = Thread.DIM).apply { textAlign = Paint.Align.CENTER }
 
-    /** 付箋の布の色（生成り・淡い黄・淡い桃・淡い水色）。文字から決めるので、同じ付箋はいつも同じ色。 */
-    private val noteColors = intArrayOf(0xFFE9E4D8.toInt(), 0xFFEFE2A8.toInt(), 0xFFEBCFC0.toInt(), 0xFFCFDDE0.toInt())
     private val noteFill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val noteBack = Paint(Paint.ANTI_ALIAS_FLAG)
     private val noteSeam = stitchPaint(context.dp(0.9f), context.dp(2.4f), context.dp(1.8f), 0x55000000)
     private val text = context.threadText(12.5f, color = 0xFF1A1A1B.toInt()).apply { clearShadowLayer() }
+    /** 納期の文字（ふつうは付箋の上に薄い墨色。急ぐものは、オレンジの札に黒い文字）。 */
+    private val dueText = context.threadText(10f, bold = true, color = 0x99000000.toInt()).apply {
+        clearShadowLayer()
+        textAlign = Paint.Align.CENTER
+    }
+    private val dueTag = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Thread.ALERT }
+    private val dueTagSeam = stitchPaint(context.dp(0.8f), context.dp(2f), context.dp(1.5f), 0x66000000)
     private val pinHead = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Thread.ALERT
         setShadowLayer(context.dp(1.5f), 0f, context.dp(1f), 0xC0000000.toInt())
@@ -91,10 +146,12 @@ class PinBoardView(
     /** はがれて落ちていく進み具合（0〜1）。 */
     private var fallT = 0f
 
-    fun setTasks(list: List<PinTask>, pinnedNew: Boolean = false) {
-        tasks = list
-        if (pinnedNew && list.isNotEmpty()) {
-            pinning = 0
+    /** 付箋を並べ直す（納期の近い順）。[pinned] は書いたばかりの付箋で、まち針で留まる動きを見せる。 */
+    fun setTasks(list: List<PinTask>, pinned: PinTask? = null) {
+        tasks = PinTask.sorted(list)
+        val at = tasks.indexOfFirst { it === pinned }
+        if (at >= 0) {
+            pinning = at
             ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = 380
                 interpolator = OvershootInterpolator(1.6f)
@@ -172,7 +229,7 @@ class PinBoardView(
         canvas.rotate(tilt, r.centerX(), r.top)
         canvas.translate(0f, -lift)
         val layer = if (alpha < 255) canvas.saveLayerAlpha(r.left - side, r.top - side, r.right + side, r.bottom + side, alpha) else -1
-        val color = noteColors[(t.text.hashCode() and 0x7fffffff) % noteColors.size]
+        val color = PinGenre.of(t.genre).color
         noteFill.color = color
         noteFill.setShadowLayer(context.dp(3f) + fold * 0.12f, 0f, context.dp(1.5f) + fold * 0.08f, 0xB0000000.toInt())
         val rad = context.dp(3f)
@@ -191,20 +248,37 @@ class PinBoardView(
         canvas.clipPath(notePath)
         val inset = RectF(r).apply { inset(context.dp(3.5f), context.dp(3.5f)) }
         canvas.drawRoundRect(inset, rad, rad, noteSeam)
-        // 文字は、付箋の中で折り返す（入らない分は「…」）
+        // 納期は、付箋の下の端に添える
         val pad = context.dp(7f)
+        val due = t.dueDate
+        var bottom = r.bottom - pad
+        if (due != null) {
+            val (label, urgent) = PinTask.dueLabel(due, LocalDate.now())
+            dueText.textSize = (side * 0.13f).coerceIn(context.sp(8.5f), context.sp(10.5f))
+            val baseline = r.bottom - context.dp(6.5f)
+            if (urgent) {
+                val tw = dueText.measureText(label) + context.dp(10f)
+                val tag = RectF(r.centerX() - tw / 2f, baseline - dueText.textSize - context.dp(1.5f), r.centerX() + tw / 2f, baseline + context.dp(3f))
+                canvas.drawRoundRect(tag, context.dp(3f), context.dp(3f), dueTag)
+                canvas.drawRoundRect(RectF(tag).apply { inset(context.dp(1.8f), context.dp(1.8f)) }, context.dp(2f), context.dp(2f), dueTagSeam)
+                dueText.color = 0xFF1A1A1B.toInt()
+            } else dueText.color = 0x99000000.toInt()
+            canvas.drawText(label, r.centerX(), baseline, dueText)
+            bottom = baseline - dueText.textSize - context.dp(3f)
+        }
+        // 文字は、付箋の中で折り返す（入らない分は「…」）
         val textTop = r.top + context.dp(13f)
         val maxW = (side - pad * 2).toInt().coerceAtLeast(1)
         text.textSize = (side * 0.17f).coerceIn(context.sp(9.5f), context.sp(13f))
         val lineH = text.fontSpacing
-        val lines = ((r.bottom - pad - textTop) / lineH).toInt().coerceAtLeast(1)
+        val lines = ((bottom - textTop) / lineH).toInt().coerceAtLeast(1)
         val layout = StaticLayout.Builder.obtain(t.text, 0, t.text.length, text, maxW)
             .setAlignment(Layout.Alignment.ALIGN_CENTER)
             .setMaxLines(lines)
             .setEllipsize(TextUtils.TruncateAt.END)
             .setIncludePad(false)
             .build()
-        canvas.translate(r.left + pad, textTop + ((r.bottom - pad - textTop) - layout.height) / 2f)
+        canvas.translate(r.left + pad, textTop + ((bottom - textTop) - layout.height) / 2f)
         layout.draw(canvas)
         canvas.restore()
         // めくれた角の裏側（少し暗い色の三角）
@@ -250,12 +324,8 @@ class PinBoardView(
         if (i in tasks.indices && !dragging) {
             longDone = true
             performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-            // いちばん前へ留め直す
-            val list = tasks.toMutableList()
-            val t = list.removeAt(i)
-            list.add(0, t)
-            setTasks(list, pinnedNew = true)
-            onChange(list)
+            // 書き直す欄を開く
+            onEdit(tasks[i])
         }
     }
 

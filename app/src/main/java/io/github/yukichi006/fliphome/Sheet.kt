@@ -1,6 +1,7 @@
 package io.github.yukichi006.fliphome
 
 import android.annotation.SuppressLint
+import android.app.DatePickerDialog
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -23,6 +24,9 @@ import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.TextView
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.temporal.TemporalAdjusters
 
 /**
  * 下からせり上がるパネル（ボトムシート）。後ろは暗くし、暗い所のタップや戻るボタンで閉じる。
@@ -344,14 +348,71 @@ fun genrePicker(context: Context, current: Genre?, onPick: (Genre?) -> Unit): Vi
 }
 
 /**
- * やることを 1 行書く欄と「留める」「続けて書く」。キーボードの決定でも留まる。
- * [onPin] には、書いた文字と、書く欄を開いたままにするか（続けて書くとき true）を渡す。
+ * 縫い付けメモの付箋を書く欄。上から「ジャンル」「納期」「文字」「留めるボタン」の順
+ * （キーボードが下半分をふさぐので、選ぶものを上に置く）。
+ * [initial] を渡すと書き直す欄になる（中身を入れておき、ボタンは「書き直す」だけ。キーボードは自動では出さない）。
+ * 書けたら [onPin] に、付箋と「続けて書くか」を渡す。ジャンルと納期は、続けて書くときもそのまま残す。
  */
-fun taskInput(context: Context, onPin: (String, Boolean) -> Unit): View {
+fun taskInput(context: Context, initial: PinTask? = null, onPin: (PinTask, Boolean) -> Unit): View {
+    val scroll = ScrollView(context).apply { isVerticalScrollBarEnabled = false }
     val column = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(0, context.dpi(10f), 0, 0)
+        setPadding(0, context.dpi(6f), 0, context.dpi(12f))
     }
+    scroll.addView(column, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+    var genre = initial?.genre ?: 0
+    var due: LocalDate? = initial?.dueDate
+    fun caption(t: String) = TextView(context).apply {
+        text = t
+        setTextColor(Thread.DIM)
+        textSize = 12.5f
+        setPadding(context.dpi(6f), 0, 0, context.dpi(4f))
+    }
+
+    // ジャンル：布の色の札を並べる（選んだものに白い糸の縁）
+    column.addView(caption("ジャンル（付箋の色）"))
+    val genres = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+    fun drawGenres() {
+        genres.removeAllViews()
+        PinGenre.ALL.forEachIndexed { i, g ->
+            genres.addView(GenreChip(context, g, i == genre).apply { setOnClickListener { genre = i; drawGenres() } },
+                LinearLayout.LayoutParams(0, context.dpi(44f), 1f))
+        }
+    }
+    drawGenres()
+    column.addView(genres, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+    // 納期：なし・今日・明日・今週中（日曜）・日付を選ぶ
+    column.addView(caption("納期（近い順に上へ並ぶ）").apply { setPadding(context.dpi(6f), context.dpi(10f), 0, context.dpi(4f)) })
+    val dues = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+    fun drawDues() {
+        dues.removeAllViews()
+        val today = LocalDate.now()
+        val quick = listOf(
+            "なし" to null,
+            "今日" to today,
+            "明日" to today.plusDays(1),
+            "今週中" to today.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)),
+        )
+        val picked = quick.indexOfFirst { it.second == due }
+        quick.forEachIndexed { i, (label, d) ->
+            dues.addView(Pill(context, label, i == picked).apply { setOnClickListener { due = d; drawDues() } },
+                LinearLayout.LayoutParams(0, context.dpi(46f), 1f))
+        }
+        // ほかの日：Android の日付の選び方を出す。選んだ日を札に出す
+        val other = due?.takeIf { picked < 0 }
+        val label = other?.let { "${it.monthValue}/${it.dayOfMonth}（${"月火水木金土日"[it.dayOfWeek.value - 1]}）" } ?: "日付…"
+        dues.addView(Pill(context, label, other != null).apply {
+            setOnClickListener {
+                val start = due ?: today
+                DatePickerDialog(context, { _, y, m, d -> due = LocalDate.of(y, m + 1, d); drawDues() },
+                    start.year, start.monthValue - 1, start.dayOfMonth).show()
+            }
+        }, LinearLayout.LayoutParams(0, context.dpi(46f), 1.5f))
+    }
+    drawDues()
+    column.addView(dues, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
     val edit = EditText(context).apply {
         background = null
         setTextColor(Thread.COLOR)
@@ -361,32 +422,76 @@ fun taskInput(context: Context, onPin: (String, Boolean) -> Unit): View {
         isSingleLine = true
         imeOptions = EditorInfo.IME_ACTION_DONE
         setPadding(context.dpi(8f), 0, context.dpi(8f), 0)
+        initial?.let { setText(it.text); setSelection(it.text.length) }
     }
     fun pin(keep: Boolean) {
         val t = edit.text.toString().trim()
         if (t.isEmpty()) return
         edit.setText("")
-        onPin(t, keep)
+        onPin(PinTask(t, genre = genre, due = due?.toEpochDay()), keep)
     }
     column.addView(PatchLayout(context, PatchPainter.Shape.Round(40f)).apply {
         addView(edit, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(64f)))
+    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(60f)).apply { topMargin = context.dpi(12f) })
     val row = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-    row.addView(Pill(context, "続けて書く").apply { setOnClickListener { pin(true) } },
-        LinearLayout.LayoutParams(0, context.dpi(54f), 1f))
-    row.addView(Pill(context, "留める", selected = true).apply { setOnClickListener { pin(false) } },
-        LinearLayout.LayoutParams(0, context.dpi(54f), 1f))
-    column.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dpi(10f) })
+    if (initial == null) {
+        row.addView(Pill(context, "続けて書く").apply { setOnClickListener { pin(true) } },
+            LinearLayout.LayoutParams(0, context.dpi(54f), 1f))
+        row.addView(Pill(context, "留める", selected = true).apply { setOnClickListener { pin(false) } },
+            LinearLayout.LayoutParams(0, context.dpi(54f), 1f))
+    } else {
+        row.addView(Pill(context, "書き直す", selected = true).apply { setOnClickListener { pin(false) } },
+            LinearLayout.LayoutParams(0, context.dpi(54f), 1f))
+    }
+    column.addView(row, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = context.dpi(8f) })
     column.addView(TextView(context).apply {
-        text = "付箋をつまんで引くと、はがれて完了。長押しでいちばん前へ。書いたことはスマホの中だけに保存します。"
+        text = "付箋をつまんで引くと、はがれて完了。長押しで書き直せます。書いたことはスマホの中だけに保存します。"
         setTextColor(Thread.DIM)
         textSize = 12.5f
         setPadding(context.dpi(8f), context.dpi(12f), context.dpi(8f), 0)
     })
     edit.setOnEditorActionListener { _, _, _ -> pin(false); true }
-    edit.requestFocus()
-    edit.post { context.getSystemService(InputMethodManager::class.java)?.showSoftInput(edit, 0) }
-    return column
+    if (initial == null) {
+        edit.requestFocus()
+        edit.post { context.getSystemService(InputMethodManager::class.java)?.showSoftInput(edit, 0) }
+    }
+    return scroll
+}
+
+/** 付箋のジャンルを選ぶ札。その布の色で塗り、名前を墨色で書く。選んでいるものは、白い糸で縁を縫い、少し大きく見せる。 */
+@SuppressLint("ViewConstructor")
+class GenreChip(context: Context, private val genre: PinGenre, private val selected: Boolean) : View(context) {
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = genre.color
+        alpha = if (selected) 255 else 150
+    }
+    private val seam = stitchPaint(context.dp(0.9f), context.dp(2.4f), context.dp(1.8f), 0x55000000)
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = context.dp(2f)
+        color = Thread.COLOR
+    }
+    private val label = context.threadText(12.5f, bold = selected, color = 0xFF1A1A1B.toInt()).apply {
+        clearShadowLayer()
+        textAlign = Paint.Align.CENTER
+    }
+    private val rect = RectF()
+
+    init {
+        isClickable = true
+        contentDescription = genre.name
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val m = context.dp(if (selected) 2f else 4f)
+        rect.set(m, m, width - m, height - m)
+        val r = context.dp(5f)
+        canvas.drawRoundRect(rect, r, r, fill)
+        canvas.drawRoundRect(RectF(rect).apply { inset(context.dp(3f), context.dp(3f)) }, r * 0.6f, r * 0.6f, seam)
+        if (selected) canvas.drawRoundRect(RectF(rect).apply { inset(-context.dp(1f), -context.dp(1f)) }, r, r, ring)
+        val name = TextUtils.ellipsize(genre.name, label, rect.width() - context.dp(6f), TextUtils.TruncateAt.END).toString()
+        canvas.drawText(name, rect.centerX(), rect.centerY() + label.textSize * 0.36f, label)
+    }
 }
 
 /** 名前を入力する欄と「保存」「元に戻す」。[original] は付け替える前の名前（元に戻すと null を渡す）。 */

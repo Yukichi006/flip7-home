@@ -299,28 +299,42 @@ class HomeActivity : Activity() {
         g.editing = editing
     }
 
-    /** 縫い付けメモ [m]。書き足し・済み・外すは、その場で保存する（ページは作り直さない）。 */
+    /** 縫い付けメモ [m]。書き足し・書き直し・はがす（完了）は、その場で保存する（ページは作り直さない）。 */
     private fun pinBoardView(m: Module): View {
         val onPage = page
+        fun current(): List<PinTask>? =
+            store.gridBoard(onPage).modules().firstOrNull { it.id == m.id }?.let { PinTask.parse(it[Module.P_TASKS]) }
         fun save(list: List<PinTask>) {
             val board = store.gridBoard(onPage)
             val cur = board.modules().firstOrNull { it.id == m.id } ?: return
-            board.replace(cur.with(Module.P_TASKS, PinTask.toJson(list)))
+            board.replace(cur.with(Module.P_TASKS, PinTask.toJson(PinTask.sorted(list))))
         }
         lateinit var view: PinBoardView
-        view = PinBoardView(this, PinTask.parse(m[Module.P_TASKS]), ::save) {
-            if (editing) return@PinBoardView
+        view = PinBoardView(this, PinTask.parse(m[Module.P_TASKS]), ::save, onAdd = add@{
+            if (editing) return@add
             openSheet("やることを留める") { s ->
                 s.setTabs(emptyList(), 0) {}
-                s.setBody(taskInput(this) { text, keepOpen ->
-                    val cur = store.gridBoard(onPage).modules().firstOrNull { it.id == m.id } ?: return@taskInput
-                    val list = listOf(PinTask(text)) + PinTask.parse(cur[Module.P_TASKS])
+                s.setBody(taskInput(this) { task, keepOpen ->
+                    val list = listOf(task) + (current() ?: return@taskInput)
                     save(list)
-                    view.setTasks(list, pinnedNew = true)
+                    view.setTasks(list, pinned = task)
                     if (!keepOpen) closeSheet()
                 })
             }
-        }
+        }, onEdit = edit@{ old ->
+            if (editing) return@edit
+            openSheet("付箋を書き直す") { s ->
+                s.setTabs(emptyList(), 0) {}
+                s.setBody(taskInput(this, initial = old) { task, _ ->
+                    val list = (current() ?: return@taskInput).toMutableList()
+                    val i = list.indexOf(old)
+                    if (i >= 0) list[i] = task else list.add(0, task)
+                    save(list)
+                    view.setTasks(list, pinned = task)
+                    closeSheet()
+                })
+            }
+        })
         view.isClickable = true
         return view
     }
