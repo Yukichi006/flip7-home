@@ -98,6 +98,7 @@
 
 ## リリースと確かめ方
 - `main` に push すると、GitHub Actions が正式版をビルドして Releases に出す。持ち主は Obtainium で更新する
+- GitHub Actions が Maven Central から「429 Too Many Requests」で断られて落ちることがある（0.39.0 のとき 2 回続いた。コードは関係なく、テストの前で止まる）。15 分ほど空けて「失敗したジョブを再実行」したら通った。続くようなら、取りに行く先に Google の写し（maven-central.storage-download.googleapis.com）を足す案がある（持ち主にはまだ聞いていない）
 - README だけを直して push すると、同じバージョンで出そうとしてリリースの手順が止まる（決まりどおりの止まり方で、APK には影響しない）
 - 0.36.0〜0.38.1 の進め方：作業用のブランチに push → GitHub Actions の「Build APK」をそのブランチで手動実行（workflow_dispatch。テストとビルドだけで、リリースはしない）→
   持ち主が「リリースして」と言ったら main へ送る（fast-forward）。持ち主はリリースのたびに「リリースして」と返事をくれる
