@@ -183,7 +183,8 @@ class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : Pa
             val le = d.address in leConnected ||
                 d.type == BluetoothDevice.DEVICE_TYPE_LE || d.type == BluetoothDevice.DEVICE_TYPE_DUAL
             val level = reported ?: if (le && (d.address in leConnected || isConnected(d))) {
-                BleBattery.request(context, d)
+                // ホーム画面が見えているときは、リングの残量を早めに問い合わせ直す
+                BleBattery.request(context, d, maxAgeMs = if (windowVisibility == VISIBLE) BleBattery.FRESH_VISIBLE_MS else BleBattery.FRESH_HIDDEN_MS)
                 BleBattery.level(d)
             } else null
             level ?: return@mapNotNull null

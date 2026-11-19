@@ -73,4 +73,25 @@ class RingPacketTest {
         assertEquals("2日前", WidgetBattery.ageText(now - 2 * 24 * 60 * 60_000L, now))
         assertNull(WidgetBattery.ageText(null, now))
     }
+
+    private fun ByteArray.hexText() = joinToString(" ") { "%02x".format(it) }
+
+    @Test
+    fun `FlipHome から送る問い合わせは、機器の情報を聞く 2 通りだけ`() {
+        assertEquals(listOf("02 00 08 00 47 43 6f ec", "02 00 06 00 0e c3"), RingPacket.DEVICE_INFO_QUERIES.map { it.hexText() })
+        for (q in RingPacket.DEVICE_INFO_QUERIES) {
+            val p = RingPacket.parse(q)!!
+            assertTrue(p.crcOk)
+            // 種類 02（読み取りの質問）・番号 00（機器の情報）だけ。設定を変える種類の包みは送らない
+            assertEquals(0x02, p.type)
+            assertEquals(0x00, p.cmd)
+        }
+    }
+
+    @Test
+    fun `問い合わせの形に対応していないという答えを見分ける`() {
+        assertTrue(RingPacket.isDeviceInfoRefusal(hex("02 00 07 00 fc 8c fe")))
+        assertFalse(RingPacket.isDeviceInfoRefusal(hex(info)))
+        assertFalse(RingPacket.isDeviceInfoRefusal(hex("02 26 07 00 fc 5b ee")))
+    }
 }

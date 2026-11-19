@@ -20,16 +20,26 @@ import java.util.UUID
  * 電池サービスを持たない機器では何も起きない（その機器は表示しない）。
  *
  * スマートリング（evofit など、独自のサービス [RING_SERVICE] を持つもの）は、電池サービスの値が空で読めない。
- * 専用アプリが「機器の情報」を問い合わせると、その答えに残量が入っているので、つないだままにしてその答えを横で聞く
- * （機器へは何も書き込まない。答えは同じ接続のすべてのアプリに配られる）。読めた残量は覚えておき、いつ読んだかも出す。
+ * 「機器の情報」の答えに残量が入っているので、つないだままにして答えを聞く（答えは同じ接続のすべてのアプリに配られる）。
+ * 0.38.0 から、FlipHome からも「機器の情報」を問い合わせる（持ち主の了承済み。送るのは [RingPacket.DEVICE_INFO_QUERIES] だけ）。
+ * ホーム画面が見えているときは前に読んでから [FRESH_VISIBLE_MS]、見えていないときは [FRESH_HIDDEN_MS] たったら問い合わせる。
+ * 読めた残量は覚えておき、いつ読んだかも出す。
  */
 @SuppressLint("MissingPermission")
 object BleBattery {
     private val SERVICE: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
     private val LEVEL: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
 
-    /** スマートリングの独自のサービスと、答えが届く値。 */
+    /** スマートリングの独自のサービスと、問い合わせを書き込む値（答えもここに届く）。 */
     private val RING_SERVICE: UUID = UUID.fromString("be940000-7333-be46-b7ae-689e71722bd5")
+    private val RING_WRITE: UUID = UUID.fromString("be940001-7333-be46-b7ae-689e71722bd5")
+
+    /** ホーム画面が見えているとき・見えていないときに、リングへ問い合わせ直すまでの時間。 */
+    const val FRESH_VISIBLE_MS = 10 * 60_000L
+    const val FRESH_HIDDEN_MS = 60 * 60_000L
+
+    /** 問い合わせてから、答えを待つ時間（過ぎたら、もう 1 つの形を試す）。 */
+    private const val QUERY_WAIT_MS = 6_000L
 
     /** 通知を受け取るかどうかを機器に伝える設定の場所。 */
     private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
@@ -61,6 +71,7 @@ object BleBattery {
         loaded = true
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         for ((key, value) in p.all) {
+            if (key == KEY_QUERY) continue
             val parts = (value as? String)?.split(",") ?: continue
             val level = parts.getOrNull(0)?.toIntOrNull() ?: continue
             val at = parts.getOrNull(1)?.toLongOrNull() ?: continue
@@ -76,6 +87,54 @@ object BleBattery {
 
     /** 残量を覚えておく機器（リング）。切断されても忘れず、つなぎ直したら、いつ読んだかを添えて出す。 */
     private val kept = mutableSetOf<String>()
+
+    /** リングへ最後に問い合わせた時刻（elapsedRealtime）。 */
+    private val queried = mutableMapOf<String, Long>()
+
+    /** 答えを待っている問い合わせの形（[RingPacket.DEVICE_INFO_QUERIES] の何番目か）。 */
+    private val waiting = mutableMapOf<String, Int>()
+
+    /** 答えが返ってきた問い合わせの形（覚えておき、次からはその形だけを送る）。分からなければ -1。 */
+    private fun workingQuery(context: Context): Int =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_QUERY, -1)
+
+    private const val KEY_QUERY = "query_form"
+
+    /**
+     * リング [device]（つないだままの [g]）に「機器の情報」を問い合わせる。[form] は問い合わせの形の番号。
+     * 答えがなければ、まだ形が分かっていないときに限り、次の形を試す。
+     */
+    private fun queryRing(context: Context, device: BluetoothDevice, g: BluetoothGatt, form: Int) {
+        val app = context.applicationContext
+        val c = g.getService(RING_SERVICE)?.getCharacteristic(RING_WRITE) ?: return
+        val bytes = RingPacket.DEVICE_INFO_QUERIES.getOrNull(form) ?: return
+        queried[device.address] = SystemClock.elapsedRealtime()
+        waiting[device.address] = form
+        val ok = runCatching { g.writeCharacteristic(c, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS }
+            .getOrDefault(false)
+        setStatus(device, if (ok) "リングに残量を問い合わせました（形 ${form + 1}）。答えを待っています…" else "リングへの問い合わせを送れませんでした（形 ${form + 1}）")
+        main.postDelayed({
+            if (waiting[device.address] != form) return@postDelayed
+            waiting.remove(device.address)
+            val next = form + 1
+            if (workingQuery(app) < 0 && next < RingPacket.DEVICE_INFO_QUERIES.size && held[device.address] === g) {
+                queryRing(app, device, g, next)
+            } else {
+                setStatus(device, "問い合わせに答えがありませんでした（形 ${form + 1}）。専用アプリを開くと読めます")
+            }
+        }, QUERY_WAIT_MS)
+    }
+
+    /** つないだままのリングなら、前に読んでから [maxAgeMs] 以上たっていれば問い合わせる。 */
+    private fun maybeQueryRing(context: Context, device: BluetoothDevice, maxAgeMs: Long) {
+        val g = held[device.address] ?: return
+        if (device.address in waiting) return
+        val now = SystemClock.elapsedRealtime()
+        val readAgo = readings[device.address]?.let { System.currentTimeMillis() - it.at } ?: Long.MAX_VALUE
+        val askedAgo = queried[device.address]?.let { now - it } ?: Long.MAX_VALUE
+        if (readAgo < maxAgeMs || askedAgo < maxAgeMs) return
+        queryRing(context, device, g, workingQuery(context).coerceAtLeast(0))
+    }
 
     /** 残量を読んだ時刻（ふつうの時計のミリ秒）。まだ読めていなければ null。 */
     fun readAt(device: BluetoothDevice): Long? = readings[device.address]?.at
@@ -98,10 +157,13 @@ object BleBattery {
      * しばらく読んでいなければ、[device] に残量を問い合わせる。[force] なら間隔に関係なく問い合わせる。
      * 結果と途中の様子はリスナーに知らせる。
      */
-    fun request(context: Context, device: BluetoothDevice, force: Boolean = false) {
+    fun request(context: Context, device: BluetoothDevice, force: Boolean = false, maxAgeMs: Long = FRESH_HIDDEN_MS) {
         load(context)
-        // リングの答えを聞いている間は、つなぎ直さない
-        if (device.address in held) return
+        // つないだままのリングは、つなぎ直さず、残量が古ければ問い合わせる
+        if (device.address in held) {
+            maybeQueryRing(context, device, maxAgeMs)
+            return
+        }
         val now = SystemClock.elapsedRealtime()
         val last = tried[device.address]
         if (!force && last != null && now - last < REFRESH_MS) return
@@ -138,9 +200,13 @@ object BleBattery {
                 g.getService(RING_SERVICE)?.let { ring ->
                     done = true
                     main.removeCallbacks(timeout)
-                    main.post { held[device.address] = g }
                     ring.characteristics.forEach { g.setCharacteristicNotification(it, true) }
-                    setStatus(device, "リングの専用アプリが残量を問い合わせるのを待っています（専用アプリを開くと読めます）")
+                    setStatus(device, "リングにつなぎました")
+                    // 答えを受け取る準備が済んでから、問い合わせる
+                    main.postDelayed({
+                        held[device.address] = g
+                        maybeQueryRing(context, device, FRESH_VISIBLE_MS)
+                    }, 1_000L)
                     return
                 }
                 val c = g.getService(SERVICE)?.getCharacteristic(LEVEL)
@@ -171,13 +237,24 @@ object BleBattery {
 
             override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
                 if (c.service?.uuid == RING_SERVICE) {
+                    if (RingPacket.isDeviceInfoRefusal(value)) {
+                        main.post {
+                            val form = waiting[device.address] ?: return@post
+                            setStatus(device, "リングが問い合わせの形 ${form + 1} に対応していませんでした")
+                        }
+                        return
+                    }
                     val info = RingPacket.deviceInfo(value) ?: return
                     main.post {
                         val r = Reading(info.level, System.currentTimeMillis())
                         readings[device.address] = r
-                        save(context.applicationContext, device.address, r)
+                        val app = context.applicationContext
+                        save(app, device.address, r)
+                        // FlipHome の問い合わせへの答えなら、その形を覚えておく
+                        val form = waiting.remove(device.address)
+                        if (form != null) app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putInt(KEY_QUERY, form).apply()
+                        setStatus(device, "読めました: ${info.level}%（版 ${info.version}${form?.let { "、問い合わせの形 ${it + 1}" } ?: "、専用アプリの問い合わせ"}）")
                     }
-                    setStatus(device, "専用アプリの問い合わせの答えから読めました: ${info.level}%（版 ${info.version}）")
                     return
                 }
                 if (c.uuid != LEVEL) return
@@ -222,5 +299,6 @@ object BleBattery {
         if (device.address !in kept) readings.remove(device.address)
         tried.remove(device.address)
         held.remove(device.address)?.let { g -> runCatching { g.close() } }
+        waiting.remove(device.address)
     }
 }

@@ -10,9 +10,34 @@ package io.github.yukichi006.fliphome
  * - 心拍の値（2a37）と、歩数の値（fea1、WeChat の歩数の形）は、決まった形で 1 秒ごとに届く
  * - 残量は「機器の情報」の包み（種類 02・番号 00）に入っている（0.36.2 の診断で、専用アプリを開いたときに届いた）。
  *   中身は `[機器の番号 2][版 2（小・大）][電池の状態 1][残量 % 1]…`。版が専用アプリの表示（2.18）と一致したので、並びは確か
+ * - 種類 02 は「読み取りの質問」のまとまり。知らない番号を聞かれると、リングは中身 fc（対応していない）と答える
+ *
+ * 0.38.0 から、FlipHome からも「機器の情報」を問い合わせる（持ち主の了承済み）。**送るのは [DEVICE_INFO_QUERIES] の 2 通りだけ**で、
+ * 設定を変える・リセットするなどの種類の包みは作らない（作る関数も用意しない）。
  */
 object RingPacket {
     class Packet(val type: Int, val cmd: Int, val payload: ByteArray, val crcOk: Boolean)
+
+    /**
+     * 「機器の情報」の問い合わせ（種類 02・番号 00）。問い合わせの中身はまだ確かめていないので、試す順に 2 通り：
+     * 1. 似たリング（YC 系）でよく使われる、中身 `47 43`（「GC」）付きの形
+     * 2. 中身なしの形
+     */
+    val DEVICE_INFO_QUERIES: List<ByteArray> = listOf(query(byteArrayOf(0x47, 0x43)), query(ByteArray(0)))
+
+    /** 種類 02・番号 00 の問い合わせの包みを作る（長さと CRC を付ける）。 */
+    private fun query(payload: ByteArray): ByteArray {
+        val len = payload.size + 6
+        val head = byteArrayOf(0x02, 0x00, (len and 0xFF).toByte(), (len shr 8).toByte()) + payload
+        val crc = crc16(head)
+        return head + byteArrayOf((crc and 0xFF).toByte(), (crc shr 8).toByte())
+    }
+
+    /** 「機器の情報」の問い合わせに、リングが「対応していない」と答えた包みか。 */
+    fun isDeviceInfoRefusal(v: ByteArray): Boolean {
+        val p = parse(v) ?: return false
+        return p.crcOk && p.type == 0x02 && p.cmd == 0x00 && p.payload.size < 6
+    }
 
     /** 機器の情報（残量・ファームウェアの版）。 */
     class DeviceInfo(val level: Int, val version: String)
