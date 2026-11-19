@@ -136,6 +136,9 @@ object BleBattery {
         queryRing(context, device, g, workingQuery(context).coerceAtLeast(0))
     }
 
+    /** スマートリングか（リングとしてつないだことがあるか）。 */
+    fun isRing(device: BluetoothDevice): Boolean = device.address in kept || device.address in held
+
     /** 残量を読んだ時刻（ふつうの時計のミリ秒）。まだ読めていなければ null。 */
     fun readAt(device: BluetoothDevice): Long? = readings[device.address]?.at
 

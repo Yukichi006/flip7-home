@@ -171,4 +171,31 @@ object WidgetBattery {
             else -> "${min / (24 * 60)}日前"
         }
     }
+
+    /** 電池の部品で、名前の代わりに縫うアイコンの種類。 */
+    enum class Kind { PHONE, EARPHONES, WATCH, RING, OTHER }
+
+    /**
+     * 機器の種類を決める。[ring] ならリング。それ以外は名前の言葉で決め、決まらなければ Bluetooth の機器の分類
+     * [majorClass]（`BluetoothClass.Device.Major` の値）で決める。どれでもなければ [Kind.OTHER]。
+     */
+    fun kindOf(name: String?, majorClass: Int?, ring: Boolean): Kind {
+        if (ring) return Kind.RING
+        val n = name.orEmpty().lowercase()
+        fun has(vararg words: String) = words.any { it in n }
+        return when {
+            has("ring", "リング") -> Kind.RING
+            has("buds", "pods", "earphone", "headphone", "イヤホン", "イヤフォン", "ヘッドホン", "ヘッドフォン") -> Kind.EARPHONES
+            has("watch", "galaxy fit", "band", "ウォッチ", "バンド") -> Kind.WATCH
+            majorClass == MAJOR_AUDIO_VIDEO -> Kind.EARPHONES
+            majorClass == MAJOR_WEARABLE -> Kind.WATCH
+            majorClass == MAJOR_PHONE -> Kind.PHONE
+            else -> Kind.OTHER
+        }
+    }
+
+    /** Bluetooth の機器の分類（`BluetoothClass.Device.Major` と同じ値）。 */
+    private const val MAJOR_PHONE = 0x0200
+    private const val MAJOR_AUDIO_VIDEO = 0x0400
+    private const val MAJOR_WEARABLE = 0x0700
 }

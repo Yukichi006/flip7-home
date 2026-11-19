@@ -14,6 +14,7 @@ import android.appwidget.AppWidgetHostView
 import android.appwidget.AppWidgetManager
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.os.BatteryManager
 import android.os.Bundle
@@ -34,8 +35,14 @@ import android.text.TextUtils
  */
 @SuppressLint("ViewConstructor")
 class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : PatchView(context) {
-    /** 1 行。[age] は、少し前に読んだ残量なら「2時間前」など。 */
-    private class Row(val name: String, val level: Int, val charging: Boolean, val age: String? = null)
+    /** 1 行。[kind] は名前の代わりに縫うアイコン。[age] は、少し前に読んだ残量なら「2時間前」など。 */
+    private class Row(
+        val name: String,
+        val level: Int,
+        val charging: Boolean,
+        val age: String? = null,
+        val kind: WidgetBattery.Kind = WidgetBattery.Kind.OTHER,
+    )
 
     private var rows = emptyList<Row>()
     private var phoneLevel = -1
@@ -163,11 +170,12 @@ class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : Pa
 
     fun refresh() {
         val list = mutableListOf<Row>()
-        if (phoneLevel >= 0) list += Row("本体", phoneLevel, phoneCharging)
+        if (phoneLevel >= 0) list += Row("本体", phoneLevel, phoneCharging, kind = WidgetBattery.Kind.PHONE)
         val bt = bluetoothRows()
         list += bt
         list += widgetRows(bt)
-        rows = list.take(MAX_ROWS)
+        // 本体・イヤホン・時計・リングの順にそろえる（同じ種類の中は名前の順）
+        rows = list.sortedBy { it.kind.ordinal }.take(MAX_ROWS)
         invalidate()
     }
 
@@ -189,7 +197,8 @@ class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : Pa
             } else null
             level ?: return@mapNotNull null
             val n = runCatching { d.alias ?: d.name }.getOrNull() ?: d.address
-            Row(n, level, false, if (reported == null) WidgetBattery.ageText(BleBattery.readAt(d)) else null)
+            Row(n, level, false, if (reported == null) WidgetBattery.ageText(BleBattery.readAt(d)) else null,
+                WidgetBattery.kindOf(n, runCatching { d.bluetoothClass?.majorDeviceClass }.getOrNull(), BleBattery.isRing(d)))
         }.sortedBy { it.name }
     }
 
@@ -200,7 +209,22 @@ class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : Pa
     private fun widgetRows(shown: List<Row>): List<Row> {
         val v = source ?: return emptyList()
         widgetEntries = runCatching { WidgetBattery.read(v) }.getOrDefault(emptyList())
-        return WidgetBattery.merge(widgetEntries, shown.map { it.name to it.level }, unnamedCandidates(), android.os.Build.MODEL).map { Row(it.first, it.second, it.third) }
+        return WidgetBattery.merge(widgetEntries, shown.map { it.name to it.level }, unnamedCandidates(), android.os.Build.MODEL)
+            .map { Row(it.first, it.second, it.third, kind = widgetKind(it.first)) }
+    }
+
+    /**
+     * Galaxy の「バッテリー」から読んだ機器の種類。同じ名前の登録済みの機器があれば、その分類で決める。
+     * 決まらなければ時計とみなす（本体と Buds 以外でここに出るのは、Galaxy Fit などの身に着ける機器のため）。
+     */
+    @SuppressLint("MissingPermission")
+    private fun widgetKind(name: String): WidgetBattery.Kind {
+        val device = if (!canReadBluetooth()) null else runCatching {
+            context.getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices
+        }.getOrNull()?.firstOrNull { d -> runCatching { d.alias ?: d.name }.getOrNull()?.let { WidgetBattery.sameDevice(it, name) } == true }
+        val kind = WidgetBattery.kindOf(name, device?.let { runCatching { it.bluetoothClass?.majorDeviceClass }.getOrNull() },
+            device?.let { BleBattery.isRing(it) } == true)
+        return if (kind == WidgetBattery.Kind.OTHER) WidgetBattery.Kind.WATCH else kind
     }
 
     /** 名前の書かれていない行に当てる名前の候補：つながっているのに、残量を読めていない機器。 */
@@ -273,14 +297,28 @@ class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : Pa
             }
             val nameW = area.width() - big.measureText(num) - unit.measureText("%") - context.dp(8f)
             val barTop = baseline + context.dp(6f)
-            // ひとことは名前の下に。下に入る高さがなければ、名前のあとに添える（棒に重ならないように）
-            val noteBelow = note != null && top + name.textSize + small.textSize * 1.35f <= barTop - context.dp(2f)
-            val shownName = if (note != null && !noteBelow) "${row.name}・$note" else row.name
-            val t = TextUtils.ellipsize(shownName, name, nameW, TextUtils.TruncateAt.END)
-            canvas.drawText(t, 0, t.length, area.left, top + name.textSize, name)
-            if (note != null && noteBelow) {
-                val n = TextUtils.ellipsize(note, small, nameW, TextUtils.TruncateAt.END)
-                canvas.drawText(n, 0, n.length, area.left, top + name.textSize + small.textSize * 1.35f, small)
+            if (row.kind != WidgetBattery.Kind.OTHER) {
+                // 名前の代わりに、機器の種類のアイコンを縫う（名前は長くて見切れるため）。ひとことはアイコンの右に添える
+                val iconH = (baseline - top).coerceIn(context.dp(14f), context.dp(30f))
+                val icon = RectF(area.left, baseline - iconH, area.left + iconH, baseline)
+                drawKind(canvas, row.kind, icon)
+                if (note != null) {
+                    val noteW = nameW - iconH - context.dp(4f)
+                    if (noteW > small.textSize * 2) {
+                        val n = TextUtils.ellipsize(note, small, noteW, TextUtils.TruncateAt.END)
+                        canvas.drawText(n, 0, n.length, icon.right + context.dp(4f), baseline - context.dp(1f), small)
+                    }
+                }
+            } else {
+                // 種類の分からない機器は、これまでどおり名前を出す
+                val noteBelow = note != null && top + name.textSize + small.textSize * 1.35f <= barTop - context.dp(2f)
+                val shownName = if (note != null && !noteBelow) "${row.name}・$note" else row.name
+                val t = TextUtils.ellipsize(shownName, name, nameW, TextUtils.TruncateAt.END)
+                canvas.drawText(t, 0, t.length, area.left, top + name.textSize, name)
+                if (note != null && noteBelow) {
+                    val n = TextUtils.ellipsize(note, small, nameW, TextUtils.TruncateAt.END)
+                    canvas.drawText(n, 0, n.length, area.left, top + name.textSize + small.textSize * 1.35f, small)
+                }
             }
             // 残量の棒：外枠は細いステッチ、残っている分はサテン刺繍のように糸で埋める
             val track = RectF(area.left, barTop, area.right, barTop + barH)
@@ -300,6 +338,55 @@ class BatteryPatch(context: Context, private val sourceWidget: Int? = null) : Pa
                 canvas.restore()
             }
             y = track.bottom + context.dp(4f)
+        }
+    }
+
+    private val iconStitch = context.stitch(1.0f)
+    private val iconPath = Path()
+
+    /** 機器の種類のアイコンを、[r]（正方形）の中にステッチで縫う。 */
+    private fun drawKind(canvas: Canvas, kind: WidgetBattery.Kind, r: RectF) {
+        val s = r.height()
+        val cx = r.centerX()
+        val p = iconStitch
+        when (kind) {
+            WidgetBattery.Kind.PHONE -> {
+                // 縦長のスマホ。真ん中に折り目（Flip）
+                val body = RectF(cx - s * 0.27f, r.top + s * 0.04f, cx + s * 0.27f, r.bottom - s * 0.04f)
+                canvas.drawRoundRect(body, s * 0.12f, s * 0.12f, p)
+                canvas.drawLine(body.left + s * 0.08f, body.centerY(), body.right - s * 0.08f, body.centerY(), p)
+            }
+            WidgetBattery.Kind.EARPHONES -> {
+                // 左右のイヤホン：丸い耳の部分と、下へのびる軸
+                for ((x, dir) in listOf(r.left + s * 0.27f to -1f, r.left + s * 0.73f to 1f)) {
+                    val y = r.top + s * 0.28f
+                    canvas.drawCircle(x, y, s * 0.17f, p)
+                    // 軸は外側の下から、まっすぐ下へ
+                    canvas.drawLine(x + dir * s * 0.1f, y + s * 0.14f, x + dir * s * 0.1f, r.bottom - s * 0.04f, p)
+                }
+            }
+            WidgetBattery.Kind.WATCH -> {
+                // 細長い画面のバンド（Galaxy Fit）と、上下のベルト
+                val face = RectF(cx - s * 0.2f, r.top + s * 0.22f, cx + s * 0.2f, r.bottom - s * 0.22f)
+                canvas.drawRoundRect(face, s * 0.1f, s * 0.1f, p)
+                for (x in listOf(cx - s * 0.13f, cx + s * 0.13f)) {
+                    canvas.drawLine(x, r.top + s * 0.02f, x, face.top, p)
+                    canvas.drawLine(x, face.bottom, x, r.bottom - s * 0.02f, p)
+                }
+            }
+            WidgetBattery.Kind.RING -> {
+                // 指輪：輪と、上の小さな石
+                val cy = r.top + s * 0.6f
+                canvas.drawCircle(cx, cy, s * 0.33f, p)
+                iconPath.reset()
+                iconPath.moveTo(cx, cy - s * 0.33f - s * 0.02f)
+                iconPath.lineTo(cx - s * 0.12f, r.top + s * 0.14f)
+                iconPath.lineTo(cx, r.top + s * 0.02f)
+                iconPath.lineTo(cx + s * 0.12f, r.top + s * 0.14f)
+                iconPath.close()
+                canvas.drawPath(iconPath, p)
+            }
+            WidgetBattery.Kind.OTHER -> {}
         }
     }
 

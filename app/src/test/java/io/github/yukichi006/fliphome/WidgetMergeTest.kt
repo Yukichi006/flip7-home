@@ -61,4 +61,18 @@ class WidgetMergeTest {
             shown = emptyList(), candidates = listOf("Galaxy Fit3 (A1B2)", "evofit C8E7"), phoneModel = "SM-F766Q")
         assertEquals(listOf("Galaxy Fit3" to 92, "evofit C8E7" to 60), out.map { it.first to it.second })
     }
+
+    @Test
+    fun `機器の種類を、名前と Bluetooth の分類から決める`() {
+        val k = WidgetBattery.Kind.entries.associateBy { it.name }
+        // リングとしてつないだ機器は、名前に「fit」があってもリング
+        assertEquals(k["RING"], WidgetBattery.kindOf("evofit C8E7", null, ring = true))
+        assertEquals(k["EARPHONES"], WidgetBattery.kindOf("Galaxy Buds3 Pro", null, ring = false))
+        assertEquals(k["WATCH"], WidgetBattery.kindOf("Galaxy Fit3 (A1B2)", null, ring = false))
+        // 名前を自分で付けた機器（「Yuki の…」など）は、Bluetooth の分類で決める
+        assertEquals(k["EARPHONES"], WidgetBattery.kindOf("Yuki のイヤフォン", 0x0400, ring = false))
+        assertEquals(k["EARPHONES"], WidgetBattery.kindOf("Yukiさんの", 0x0400, ring = false))
+        assertEquals(k["WATCH"], WidgetBattery.kindOf("Yuki の J", 0x0700, ring = false))
+        assertEquals(k["OTHER"], WidgetBattery.kindOf("なにか", null, ring = false))
+    }
 }
