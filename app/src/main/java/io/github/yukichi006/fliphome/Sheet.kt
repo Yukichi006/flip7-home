@@ -1,7 +1,7 @@
 package io.github.yukichi006.fliphome
 
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
-import android.app.DatePickerDialog
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -11,6 +11,8 @@ import android.text.InputType
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -24,9 +26,8 @@ import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.TextView
-import java.time.DayOfWeek
 import java.time.LocalDate
-import java.time.temporal.TemporalAdjusters
+import kotlin.math.roundToInt
 
 /**
  * 下からせり上がるパネル（ボトムシート）。後ろは暗くし、暗い所のタップや戻るボタンで閉じる。
@@ -348,7 +349,7 @@ fun genrePicker(context: Context, current: Genre?, onPick: (Genre?) -> Unit): Vi
 }
 
 /**
- * 縫い付けメモの付箋を書く欄。上から「ジャンル」「納期」「文字」「留めるボタン」の順
+ * 縫い付けメモの付箋を書く欄。上から「ジャンル」「納期（横に滑らせるつまみ）」「文字」「留めるボタン」の順
  * （キーボードが下半分をふさぐので、選ぶものを上に置く）。
  * [initial] を渡すと書き直す欄になる（中身を入れておき、ボタンは「書き直す」だけ。キーボードは自動では出さない）。
  * 書けたら [onPin] に、付箋と「続けて書くか」を渡す。ジャンルと納期は、続けて書くときもそのまま残す。
@@ -382,36 +383,19 @@ fun taskInput(context: Context, initial: PinTask? = null, onPin: (PinTask, Boole
     drawGenres()
     column.addView(genres, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
-    // 納期：なし・今日・明日・今週中（日曜）・日付を選ぶ
-    column.addView(caption("納期（近い順に上へ並ぶ）").apply { setPadding(context.dpi(6f), context.dpi(10f), 0, context.dpi(4f)) })
-    val dues = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-    fun drawDues() {
-        dues.removeAllViews()
-        val today = LocalDate.now()
-        val quick = listOf(
-            "なし" to null,
-            "今日" to today,
-            "明日" to today.plusDays(1),
-            "今週中" to today.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY)),
-        )
-        val picked = quick.indexOfFirst { it.second == due }
-        quick.forEachIndexed { i, (label, d) ->
-            dues.addView(Pill(context, label, i == picked).apply { setOnClickListener { due = d; drawDues() } },
-                LinearLayout.LayoutParams(0, context.dpi(46f), 1f))
-        }
-        // ほかの日：Android の日付の選び方を出す。選んだ日を札に出す
-        val other = due?.takeIf { picked < 0 }
-        val label = other?.let { "${it.monthValue}/${it.dayOfMonth}（${"月火水木金土日"[it.dayOfWeek.value - 1]}）" } ?: "日付…"
-        dues.addView(Pill(context, label, other != null).apply {
-            setOnClickListener {
-                val start = due ?: today
-                DatePickerDialog(context, { _, y, m, d -> due = LocalDate.of(y, m + 1, d); drawDues() },
-                    start.year, start.monthValue - 1, start.dayOfMonth).show()
-            }
-        }, LinearLayout.LayoutParams(0, context.dpi(46f), 1.5f))
+    // 納期：「今日」「今週」「今月」「なし」を、横に滑らせるつまみで選ぶ。見出しに、決まった日を添える
+    val dueCaption = caption("").apply { setPadding(context.dpi(6f), context.dpi(10f), 0, context.dpi(4f)) }
+    fun showDue() {
+        val d = due
+        dueCaption.text = if (d == null) "納期（近い順に上へ並ぶ）"
+        else "納期（近い順に上へ並ぶ）：${d.monthValue}/${d.dayOfMonth}（${"月火水木金土日"[d.dayOfWeek.value - 1]}）まで"
     }
-    drawDues()
-    column.addView(dues, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+    showDue()
+    column.addView(dueCaption)
+    column.addView(DueSlider(context, PinTask.DUE_STOPS, PinTask.stopOf(due, LocalDate.now())) { stop ->
+        due = PinTask.dueAt(stop, LocalDate.now())
+        showDue()
+    }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, context.dpi(52f)))
 
     val edit = EditText(context).apply {
         background = null
@@ -491,6 +475,116 @@ class GenreChip(context: Context, private val genre: PinGenre, private val selec
         if (selected) canvas.drawRoundRect(RectF(rect).apply { inset(-context.dp(1f), -context.dp(1f)) }, r, r, ring)
         val name = TextUtils.ellipsize(genre.name, label, rect.width() - context.dp(6f), TextUtils.TruncateAt.END).toString()
         canvas.drawText(name, rect.centerX(), rect.centerY() + label.textSize * 0.36f, label)
+    }
+}
+
+/**
+ * 納期を選ぶ横長のつまみ（左から「今日」「今週」「今月」「なし」）。フェルトの溝の上を、生成りのつまみが滑る。
+ * 指を置いた所へつまみが来て、横になぞるとついてくる（段をまたぐたびに軽く震える）。離すといちばん近い段に収まり、
+ * 段が変わったら [onPick] にその番号を渡す。文字は段ごとに幅を等分するので、見切れない。
+ */
+@SuppressLint("ViewConstructor")
+class DueSlider(context: Context, private val labels: List<String>, initial: Int, private val onPick: (Int) -> Unit) : View(context) {
+    private var index = initial.coerceIn(0, labels.size - 1)
+    /** つまみの位置（段の番号。なぞっている間は半端な値になる）。 */
+    private var pos = index.toFloat()
+    private var tick = index
+    private var anim: ValueAnimator? = null
+    private val groove = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Cloth.FELT }
+    private val grooveSeam = context.stitch(1.0f, Thread.DIM)
+    private val knob = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Thread.COLOR
+        setShadowLayer(context.dp(2f), 0f, context.dp(1f), 0x88000000.toInt())
+    }
+    private val knobSeam = context.stitch(1.0f, Cloth.BASE)
+    private val label = context.threadText(14f, color = Thread.DIM).apply { textAlign = Paint.Align.CENTER }
+    private val knobLabel = context.threadText(14f, bold = true, color = Cloth.BASE).apply {
+        textAlign = Paint.Align.CENTER
+        clearShadowLayer()
+    }
+    private val rect = RectF()
+
+    init {
+        isClickable = true
+        describe()
+    }
+
+    private fun describe() { contentDescription = "納期：${labels[index]}" }
+
+    /** 段を並べる幅（溝の内側）。 */
+    private fun left() = context.dp(7f)
+    private fun segW() = (width - 2 * left()) / labels.size
+    private fun posAt(x: Float) = ((x - left()) / segW() - 0.5f).coerceIn(0f, labels.size - 1f)
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                // 縦のスクロールや、パネルを閉じる動きに取られないようにする
+                parent?.requestDisallowInterceptTouchEvent(true)
+                anim?.cancel()
+                follow(e.x)
+            }
+            MotionEvent.ACTION_MOVE -> follow(e.x)
+            MotionEvent.ACTION_UP -> {
+                follow(e.x)
+                settle(pos.roundToInt())
+                performClick()
+            }
+            MotionEvent.ACTION_CANCEL -> settle(index)
+        }
+        return true
+    }
+
+    override fun performClick(): Boolean = super.performClick()
+
+    private fun follow(x: Float) {
+        pos = posAt(x)
+        val near = pos.roundToInt()
+        if (near != tick) {
+            tick = near
+            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
+        invalidate()
+    }
+
+    /** つまみを段 [i] に収める（少し滑らせて）。段が変わっていれば知らせる。 */
+    private fun settle(i: Int) {
+        anim?.cancel()
+        anim = ValueAnimator.ofFloat(pos, i.toFloat()).apply {
+            duration = 140
+            addUpdateListener { pos = it.animatedValue as Float; invalidate() }
+            start()
+        }
+        tick = i
+        if (i != index) {
+            index = i
+            describe()
+            onPick(i)
+        }
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val m = context.dp(4f)
+        rect.set(m, m, width - m, height - m)
+        canvas.drawRoundRect(rect, rect.height() / 2, rect.height() / 2, groove)
+        rect.inset(context.dp(3.5f), context.dp(3.5f))
+        canvas.drawRoundRect(rect, rect.height() / 2, rect.height() / 2, grooveSeam)
+        val seg = segW()
+        val mid = height / 2f
+        for (i in labels.indices) {
+            val t = TextUtils.ellipsize(labels[i], label, seg - context.dp(8f), TextUtils.TruncateAt.END)
+            canvas.drawText(t, 0, t.length, left() + seg * (i + 0.5f), mid + label.textSize * 0.35f, label)
+        }
+        // つまみ：段ひとつ分の幅の、生成りの布
+        val cx = left() + seg * (pos + 0.5f)
+        val half = seg / 2f - context.dp(1f)
+        rect.set(cx - half, m + context.dp(2f), cx + half, height - m - context.dp(2f))
+        canvas.drawRoundRect(rect, rect.height() / 2, rect.height() / 2, knob)
+        rect.inset(context.dp(3f), context.dp(3f))
+        canvas.drawRoundRect(rect, rect.height() / 2, rect.height() / 2, knobSeam)
+        val name = labels[pos.roundToInt().coerceIn(0, labels.size - 1)]
+        val t = TextUtils.ellipsize(name, knobLabel, seg - context.dp(8f), TextUtils.TruncateAt.END)
+        canvas.drawText(t, 0, t.length, cx, mid + knobLabel.textSize * 0.35f, knobLabel)
     }
 }
 

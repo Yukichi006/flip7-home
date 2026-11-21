@@ -53,4 +53,32 @@ class PinTaskTest {
         assertEquals("11/26" to false, PinTask.dueLabel(today.plusDays(7), today))
         assertEquals("1/5" to false, PinTask.dueLabel(LocalDate.of(2027, 1, 5), today))
     }
+
+    @Test
+    fun `納期の段の日：今日・今週は日曜・今月は末日・なし`() {
+        // 2026-11-19 は木曜
+        assertEquals(today, PinTask.dueAt(0, today))
+        assertEquals(LocalDate.of(2026, 11, 22), PinTask.dueAt(1, today))
+        assertEquals(LocalDate.of(2026, 11, 30), PinTask.dueAt(2, today))
+        assertEquals(null, PinTask.dueAt(PinTask.STOP_NONE, today))
+        // 日曜は、今日と今週が同じ日
+        val sunday = LocalDate.of(2026, 11, 22)
+        assertEquals(sunday, PinTask.dueAt(1, sunday))
+    }
+
+    @Test
+    fun `書き直すときの段：同じ日の段、なければ収まるいちばん近い段`() {
+        assertEquals(PinTask.STOP_NONE, PinTask.stopOf(null, today))
+        assertEquals(0, PinTask.stopOf(today, today))
+        assertEquals(1, PinTask.stopOf(LocalDate.of(2026, 11, 22), today))
+        assertEquals(2, PinTask.stopOf(LocalDate.of(2026, 11, 30), today))
+        assertEquals(0, PinTask.stopOf(today.minusDays(3), today)) // 過ぎたもの
+        assertEquals(1, PinTask.stopOf(today.plusDays(1), today)) // 前の作りの「明日」
+        assertEquals(2, PinTask.stopOf(LocalDate.of(2026, 11, 25), today))
+        assertEquals(2, PinTask.stopOf(LocalDate.of(2027, 1, 5), today)) // 前の作りで選んだ遠い日
+        // 月末が週の終わりより先に来る週（12/29 火 → 今週は 1/3、今月は 12/31）
+        val dec29 = LocalDate.of(2026, 12, 29)
+        assertEquals(2, PinTask.stopOf(LocalDate.of(2026, 12, 31), dec29))
+        assertEquals(1, PinTask.stopOf(LocalDate.of(2027, 1, 2), dec29))
+    }
 }

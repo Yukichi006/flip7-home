@@ -17,8 +17,10 @@ import android.view.animation.AccelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
+import java.time.temporal.TemporalAdjusters
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
@@ -49,6 +51,29 @@ data class PinTask(val text: String, val done: Boolean = false, val genre: Int =
 
         /** 納期の近い順に並べる。納期のないものは後ろ。同じ納期どうしは、今の順のまま（新しく書いたものが前）。 */
         fun sorted(list: List<PinTask>): List<PinTask> = list.sortedWith(compareBy(nullsLast()) { it.due })
+
+        /** 書く欄で選べる納期の段。つまみの左から、近い順に並ぶ（番号は [dueAt] と [stopOf] で使う）。 */
+        val DUE_STOPS = listOf("今日", "今週", "今月", "なし")
+        const val STOP_NONE = 3
+
+        /** 段 [stop] の納期の日：今日＝今日、今週＝その週の日曜、今月＝その月の末日、なし＝null。 */
+        fun dueAt(stop: Int, today: LocalDate): LocalDate? = when (stop) {
+            0 -> today
+            1 -> today.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))
+            2 -> today.with(TemporalAdjusters.lastDayOfMonth())
+            else -> null
+        }
+
+        /**
+         * 書き直すとき、今の納期 [due] に合う段。ちょうど同じ日の段があればそれ、なければ
+         * その日までに収まるいちばん近い段（過ぎたものは「今日」、遠いもの＝前の作りで日付を選んだものは「今月」）。
+         */
+        fun stopOf(due: LocalDate?, today: LocalDate): Int {
+            if (due == null) return STOP_NONE
+            val stops = 0 until STOP_NONE
+            stops.firstOrNull { dueAt(it, today) == due }?.let { return it }
+            return stops.filter { !due.isAfter(dueAt(it, today)) }.minByOrNull { dueAt(it, today)!! } ?: 2
+        }
 
         /**
          * 付箋の下に添える納期の文字と、急ぐかどうか（今日まで・過ぎたものは、オレンジの札にする）。
